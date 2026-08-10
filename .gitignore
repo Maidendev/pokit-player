@@ -1,0 +1,58 @@
+# ── Dependencies ──
+node_modules/
+package-lock.json
+
+# ── Build artifacts ──
+dist/
+out/
+build/
+*.dmg
+*.exe
+*.AppImage
+*.deb
+*.rpm
+*.snap
+*.blockmap
+
+# ── Platform-specific FFmpeg binaries ──
+# (Replit uses system ffmpeg from Nix instead)
+src/bin/ffmpeg-darwin
+src/bin/ffmpeg-darwin-arm64
+src/bin/ffmpeg.exe
+
+# ── Signing & certificates ──
+*.p12
+*.p8
+*.cer
+*.pem
+*.key
+*.provisionprofile
+
+# ── macOS artifacts ──
+.DS_Store
+*.app/
+
+# ── Editor / IDE ──
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── Replit ──
+.cache/
+.config/
+.upm/
+.local/
+replit_zip_error_log.txt
+
+# ── Logs ──
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.log
+
+# ── Environment ──
+.env
+.env.local
+.env.production

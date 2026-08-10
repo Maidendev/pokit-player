@@ -1,0 +1,73 @@
+# PokitPlayer — Replit Configuration
+# https://github.com/nicholasgasior/replit-docs
+
+run = "npm start"
+entrypoint = "src/main.js"
+
+[nix]
+channel = "stable-23_11"
+
+[env]
+DISPLAY = ":0"
+ELECTRON_DISABLE_SANDBOX = "1"
+ELECTRON_ENABLE_LOGGING = "1"
+
+[languages]
+
+[languages.javascript]
+pattern = "**/{*.js,*.jsx,*.ts,*.tsx}"
+
+[languages.javascript.languageServer]
+start = "typescript-language-server --stdio"
+
+[packager]
+language = "nodejs"
+
+[packager.features]
+packageSearch = true
+guessImports = true
+enabledForHosting = false
+
+[unitTest]
+language = "nodejs"
+
+[debugger]
+
+[debugger.interactive]
+transport = "localhost:9229"
+startCommand = ["npm", "run", "dev:debug"]
+
+[debugger.interactive.integratedAdapter]
+dapTcpAddress = "localhost:9229"
+
+[debugger.interactive.initializeMessage]
+command = "initialize"
+type = "request"
+
+[debugger.interactive.initializeMessage.arguments]
+clientID = "replit"
+clientName = "replit.com"
+columnsStartAt1 = true
+linesStartAt1 = true
+locale = "en-us"
+pathFormat = "path"
+supportsInvalidatedEvent = true
+supportsProgressReporting = true
+supportsRunInTerminalRequest = true
+supportsVariablePaging = true
+supportsVariableType = true
+
+[debugger.interactive.launchMessage]
+command = "launch"
+type = "request"
+
+[debugger.interactive.launchMessage.arguments]
+args = []
+console = "externalTerminal"
+cwd = "."
+pauseForSourceMap = false
+program = "./src/main.js"
+request = "launch"
+sourceMaps = true
+stopOnEntry = false
+type = "pwa-node"

@@ -1,0 +1,294 @@
+{
+  "name": "pokitplayer",
+  "version": "1.1.3",
+  "description": "PokitPlayer \u2014 A professional cross-platform video player with instant streaming playback for ProRes/DNxHD/DNxHR, QuickTime shortcuts, timecode display, and file info viewer.",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "dev:headless": "xvfb-run --auto-servernum --server-args='-screen 0 1280x720x24' electron . --dev --disable-gpu",
+    "dev:debug": "electron --inspect=9229 . --dev",
+    "lint": "npx eslint src/ --ext .js",
+    "clean": "rm -rf dist/ node_modules/",
+    "build": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder",
+    "build:win": "electron-builder --win",
+    "build:mac": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac",
+    "build:linux": "electron-builder --linux",
+    "build:all": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win --mac --linux",
+    "build:mac:signed": "electron-builder --mac",
+    "build:mac:signed:arm64": "electron-builder --mac --arm64",
+    "build:mac:signed:x64": "electron-builder --mac --x64",
+    "build:mac:signed:universal": "electron-builder --mac --arm64 --x64",
+    "sign:mac": "scripts/sign-and-build-mac.sh",
+    "pack": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --dir"
+  },
+  "build": {
+    "appId": "com.pokitplayer.app",
+    "productName": "PokitPlayer",
+    "copyright": "Copyright \u00a9 2026 PokitPlayer Contributors",
+    "files": [
+      "src/**/*",
+      "node_modules/**/*"
+    ],
+    "asarUnpack": [
+      "node_modules/ffmpeg-static/**",
+      "src/bin/**"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "src/assets/icon.ico",
+      "publisherName": "PokitPlayer",
+      "verifyUpdateCodeSignature": false,
+      "requestedExecutionLevel": "asInvoker",
+      "extraFiles": [],
+      "files": [
+        "!src/bin/ffmpeg-darwin"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": true,
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": "src/assets/icon.ico",
+      "uninstallerIcon": "src/assets/icon.ico",
+      "installerHeaderIcon": "src/assets/icon.ico",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "PokitPlayer",
+      "menuCategory": "Video",
+      "deleteAppDataOnUninstall": true,
+      "displayLanguageSelector": false
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "icon": "src/assets/icon.icns",
+      "category": "public.app-category.video",
+      "darkModeSupport": true,
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "entitlements.mac.plist",
+      "entitlementsInherit": "entitlements.mac.inherit.plist",
+      "signIgnore": [
+        "src/bin/ffmpeg-darwin",
+        "src/bin/ffmpeg-darwin-arm64"
+      ],
+      "type": "distribution",
+      "notarize": false,
+      "files": [
+        "!src/bin/ffmpeg.exe"
+      ]
+    },
+    "afterSign": "scripts/notarize.js",
+    "dmg": {
+      "title": "PokitPlayer",
+      "icon": "src/assets/icon.icns",
+      "contents": [
+        {
+          "x": 130,
+          "y": 220
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ],
+      "window": {
+        "width": 540,
+        "height": 380
+      }
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "icon": "src/assets/icon.png",
+      "category": "Video",
+      "desktop": {
+        "MimeType": "video/mp4;video/webm;video/x-matroska;video/avi;video/quicktime;video/x-m4v;video/x-flv;video/x-ms-wmv;video/mpeg;application/mxf;image/x-dpx;image/x-exr;image/tiff"
+      }
+    },
+    "fileAssociations": [
+      {
+        "ext": "mp4",
+        "name": "MP4 Video",
+        "description": "MPEG-4 Video File",
+        "mimeType": "video/mp4",
+        "role": "Viewer",
+        "icon": "src/assets/icon.ico"
+      },
+      {
+        "ext": "webm",
+        "name": "WebM Video",
+        "description": "WebM Video File",
+        "mimeType": "video/webm",
+        "role": "Viewer",
+        "icon": "src/assets/icon.ico"
+      },
+      {
+        "ext": "mkv",
+        "name": "MKV Video",
+        "description": "Matroska Video File",
+        "mimeType": "video/x-matroska",
+        "role": "Viewer",
+        "icon": "src/assets/icon.ico"
+      },
+      {
+        "ext": "avi",
+        "name": "AVI Video",
+        "description": "AVI Video File",
+        "mimeType": "video/avi",
+        "role": "Viewer",
+        "icon": "src/assets/icon.ico"
+      },
+      {
+        "ext": "mov",
+        "name": "MOV Video",
+        "description": "QuickTime Movie",
+        "mimeType": "video/quicktime",
+        "role": "Viewer",
+        "icon": "src/assets/icon.ico"
+      },
+      {
+        "ext": "m4v",
+        "name": "M4V Video",
+        "description": "MPEG-4 Video File",
+        "mimeType": "video/x-m4v",
+        "role": "Viewer",
+        "icon": "src/assets/icon.ico"
+      },
+      {
+        "ext": "flv",
+        "name": "FLV Video",
+        "description": "Flash Video File",
+        "mimeType": "video/x-flv",
+        "role": "Viewer",
+        "icon": "src/assets/icon.ico"
+      },
+      {
+        "ext": "wmv",
+        "name": "WMV Video",
+        "description": "Windows Media Video",
+        "mimeType": "video/x-ms-wmv",
+        "role": "Viewer",
+        "icon": "src/assets/icon.ico"
+      },
+      {
+        "ext": "mpg",
+        "name": "MPG Video",
+        "description": "MPEG Video File",
+        "mimeType": "video/mpeg",
+        "role": "Viewer",
+        "icon": "src/assets/icon.ico"
+      },
+      {
+        "ext": "mpeg",
+        "name": "MPEG Video",
+        "description": "MPEG Video File",
+        "mimeType": "video/mpeg",
+        "role": "Viewer",
+        "icon": "src/assets/icon.ico"
+      },
+      {
+        "ext": "mxf",
+        "name": "MXF Video",
+        "description": "Material Exchange Format",
+        "mimeType": "application/mxf",
+        "role": "Viewer",
+        "icon": "src/assets/icon.ico"
+      },
+      {
+        "ext": "dpx",
+        "name": "DPX Image",
+        "description": "Digital Picture Exchange",
+        "mimeType": "image/x-dpx",
+        "role": "Viewer",
+        "icon": "src/assets/icon.ico"
+      },
+      {
+        "ext": "exr",
+        "name": "EXR Image",
+        "description": "OpenEXR Image",
+        "mimeType": "image/x-exr",
+        "role": "Viewer",
+        "icon": "src/assets/icon.ico"
+      },
+      {
+        "ext": "tif",
+        "name": "TIFF Image",
+        "description": "TIFF Image File",
+        "mimeType": "image/tiff",
+        "role": "Viewer",
+        "icon": "src/assets/icon.ico"
+      },
+      {
+        "ext": "tiff",
+        "name": "TIFF Image",
+        "description": "TIFF Image File",
+        "mimeType": "image/tiff",
+        "role": "Viewer",
+        "icon": "src/assets/icon.ico"
+      }
+    ],
+    "protocols": [
+      {
+        "name": "PokitPlayer Video",
+        "schemes": [
+          "pokitplayer"
+        ]
+      }
+    ]
+  },
+  "keywords": [
+    "video",
+    "player",
+    "electron",
+    "timecode",
+    "professional",
+    "pokitplayer"
+  ],
+  "author": "PokitPlayer Contributors",
+  "license": "MIT",
+  "devDependencies": {
+    "@electron/notarize": "^2.3.2",
+    "electron": "^28.0.0",
+    "electron-builder": "^24.9.1"
+  },
+  "dependencies": {
+    "ffmpeg-static": "^5.3.0",
+    "fluent-ffmpeg": "^2.1.3"
+  }
+}

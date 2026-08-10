@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; media-src 'self' file: blob:; img-src 'self' data:; script-src 'self';">
+  <title>PokitPlayer</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Title Bar (draggable region) -->
+    <div id="title-bar">
+      <div class="title-bar-drag"></div>
+      <div class="title-text" id="title-text">PokitPlayer</div>
+    </div>
+
+    <!-- Main Video Area -->
+    <div id="video-container">
+      <video id="video-player" preload="auto"></video>
+
+      <!-- Drop Zone Overlay -->
+      <div id="drop-zone" class="visible">
+        <div class="drop-zone-content">
+          <svg class="drop-icon" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect x="8" y="12" width="48" height="36" rx="4" stroke="currentColor" stroke-width="2"/>
+            <polygon points="26,22 26,38 40,30" fill="currentColor" opacity="0.6"/>
+            <path d="M32 52 L32 58 M24 58 L40 58" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+          <h2>Drop a video file here</h2>
+          <p>or press <kbd>⌘O</kbd> / <kbd>Ctrl+O</kbd> to open</p>
+          <p class="formats-hint">Supported: MP4, WebM, MKV, AVI, MOV, ProRes, DNxHD/HR, MXF, Image Sequences</p>
+        </div>
+      </div>
+
+      <!-- Drag Overlay -->
+      <div id="drag-overlay">
+        <div class="drag-overlay-content">
+          <svg class="drag-icon" viewBox="0 0 48 48" fill="none">
+            <path d="M24 4 L24 34 M14 24 L24 34 L34 24" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M8 40 L40 40" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+          </svg>
+          <span>Drop to open</span>
+        </div>
+      </div>
+
+      <!-- Big Play Button (center) -->
+      <button id="big-play-btn" class="hidden" title="Play/Pause">
+        <svg viewBox="0 0 48 48" fill="currentColor">
+          <polygon points="16,10 16,38 40,24"/>
+        </svg>
+      </button>
+
+      <!-- Transcode Overlay -->
+      <div id="transcode-overlay" class="hidden">
+        <div class="transcode-overlay-content">
+          <div class="transcode-spinner"></div>
+          <div id="transcode-message">Transcoding…</div>
+          <div class="transcode-progress-track">
+            <div id="transcode-progress-bar"></div>
+          </div>
+          <div id="transcode-percent">0%</div>
+          <div id="transcode-codec-info" class="transcode-meta"></div>
+        </div>
+      </div>
+
+      <!-- Image Sequence FPS Dialog -->
+      <div id="seq-fps-dialog" class="hidden">
+        <div class="seq-dialog-box">
+          <h3>Image Sequence Detected</h3>
+          <p id="seq-info-text">Select the frame rate for playback:</p>
+          <div class="seq-fps-row">
+            <label for="seq-fps-select">Frame Rate:</label>
+            <select id="seq-fps-select">
+              <option value="23.976">23.976 fps</option>
+              <option value="24" selected>24 fps</option>
+              <option value="25">25 fps</option>
+              <option value="29.97">29.97 fps</option>
+              <option value="30">30 fps</option>
+              <option value="48">48 fps</option>
+              <option value="50">50 fps</option>
+              <option value="59.94">59.94 fps</option>
+              <option value="60">60 fps</option>
+            </select>
+          </div>
+          <div class="seq-dialog-buttons">
+            <button id="seq-btn-cancel" class="seq-btn seq-btn-secondary">Cancel</button>
+            <button id="seq-btn-render" class="seq-btn seq-btn-primary">Render &amp; Play</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Controls Bar -->
+    <div id="controls-bar" class="hidden">
+      <!-- Timeline / Scrubber -->
+      <div id="timeline-container">
+        <div id="timeline-track">
+          <div id="timeline-buffered"></div>
+          <div id="timeline-progress"></div>
+          <div id="timeline-thumb"></div>
+        </div>
+        <div id="timeline-tooltip" class="hidden">00:00:00:00</div>
+      </div>
+
+      <!-- Controls Row -->
+      <div id="controls-row">
+        <!-- Left: Playback controls -->
+        <div class="controls-left">
+          <button id="btn-skip-back" class="ctrl-btn" title="Skip Back 5s (←)">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12.5 3C7.81 3 4 6.81 4 11.5H1l4 4 4-4H6c0-3.59 2.91-6.5 6.5-6.5S19 7.91 19 11.5 16.09 18 12.5 18v2c4.69 0 8.5-3.81 8.5-8.5S17.19 3 12.5 3z"/><text x="9" y="14.5" font-size="6" font-weight="bold">5</text></svg>
+          </button>
+          <button id="btn-prev-frame" class="ctrl-btn" title="Previous Frame (⌘←)">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6V6zm3.5 6 8.5 6V6l-8.5 6z"/></svg>
+          </button>
+          <button id="btn-play" class="ctrl-btn ctrl-btn-play" title="Play/Pause (Space)">
+            <svg id="icon-play" viewBox="0 0 24 24" fill="currentColor"><polygon points="8,5 8,19 19,12"/></svg>
+            <svg id="icon-pause" viewBox="0 0 24 24" fill="currentColor" class="hidden"><path d="M6 5h4v14H6V5zm8 0h4v14h-4V5z"/></svg>
+          </button>
+          <button id="btn-next-frame" class="ctrl-btn" title="Next Frame (⌘→)">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 18h2V6h-2v12zM4 18l8.5-6L4 6v12z"/></svg>
+          </button>
+          <button id="btn-skip-fwd" class="ctrl-btn" title="Skip Forward 5s (→)">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M11.5 3c4.69 0 8.5 3.81 8.5 8.5h3l-4 4-4-4h3c0-3.59-2.91-6.5-6.5-6.5S5 7.91 5 11.5 7.91 18 11.5 18v2C6.81 20 3 16.19 3 11.5S6.81 3 11.5 3z"/><text x="8.5" y="14.5" font-size="6" font-weight="bold">5</text></svg>
+          </button>
+        </div>
+
+        <!-- Center: Timecode -->
+        <div class="controls-center">
+          <div id="timecode-display">
+            <span id="timecode-current" class="timecode">00:00:00:00</span>
+            <span class="timecode-sep">/</span>
+            <span id="timecode-total" class="timecode">00:00:00:00</span>
+          </div>
+        </div>
+
+        <!-- Right: Volume, Info, Fullscreen -->
+        <div class="controls-right">
+          <button id="btn-mute" class="ctrl-btn" title="Mute/Unmute (M)">
+            <svg id="icon-vol-high" viewBox="0 0 24 24" fill="currentColor"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 8.77v6.46A4.49 4.49 0 0 0 16.5 12zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg>
+            <svg id="icon-vol-low" viewBox="0 0 24 24" fill="currentColor" class="hidden"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 8.77v6.46A4.49 4.49 0 0 0 16.5 12z"/></svg>
+            <svg id="icon-vol-mute" viewBox="0 0 24 24" fill="currentColor" class="hidden"><path d="M16.5 12A4.5 4.5 0 0 0 14 8.77v2.06l2.47 2.47c.03-.1.03-.2.03-.3zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51A8.87 8.87 0 0 0 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3 3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06a8.99 8.99 0 0 0 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4 9.91 6.09 12 8.18V4z"/></svg>
+          </button>
+          <div id="volume-slider-container">
+            <input type="range" id="volume-slider" min="0" max="1" step="0.01" value="1">
+          </div>
+          <button id="btn-info" class="ctrl-btn" title="File Info (⌘I)">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
+          </button>
+          <button id="btn-fullscreen" class="ctrl-btn" title="Fullscreen (F)">
+            <svg id="icon-fs-enter" viewBox="0 0 24 24" fill="currentColor"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
+            <svg id="icon-fs-exit" viewBox="0 0 24 24" fill="currentColor" class="hidden"><path d="M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z"/></svg>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- File Info Panel -->
+    <div id="file-info-panel" class="hidden">
+      <div class="info-panel-header">
+        <h3>File Information</h3>
+        <button id="btn-close-info" class="ctrl-btn">&times;</button>
+      </div>
+      <div class="info-panel-body">
+        <div class="info-section">
+          <h4>General</h4>
+          <div class="info-grid" id="info-general"></div>
+        </div>
+        <div class="info-section">
+          <h4>Video</h4>
+          <div class="info-grid" id="info-video"></div>
+        </div>
+        <div class="info-section">
+          <h4>Audio</h4>
+          <div class="info-grid" id="info-audio"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Shortcuts Panel -->
+    <div id="shortcuts-panel" class="hidden">
+      <div class="info-panel-header">
+        <h3>Keyboard Shortcuts</h3>
+        <button id="btn-close-shortcuts" class="ctrl-btn">&times;</button>
+      </div>
+      <div class="info-panel-body">
+        <div class="shortcut-row"><kbd>Space</kbd><span>Play / Pause</span></div>
+        <div class="shortcut-row"><kbd>←</kbd> / <kbd>→</kbd><span>Skip 5s back / forward</span></div>
+        <div class="shortcut-row"><kbd>⌘←</kbd> / <kbd>⌘→</kbd><span>Frame back / forward</span></div>
+        <div class="shortcut-row"><kbd>↑</kbd> / <kbd>↓</kbd><span>Volume up / down</span></div>
+        <div class="shortcut-row"><kbd>M</kbd><span>Mute / Unmute</span></div>
+        <div class="shortcut-row"><kbd>F</kbd><span>Toggle fullscreen</span></div>
+        <div class="shortcut-row"><kbd>0</kbd>–<kbd>9</kbd><span>Jump to 0%–90%</span></div>
+        <div class="shortcut-row"><kbd>⌘O</kbd><span>Open file</span></div>
+        <div class="shortcut-row"><kbd>⌘I</kbd><span>File information</span></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>
