@@ -57,6 +57,11 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Works around a longstanding electron-builder bug where its
+          # hardlink-based file copier loses an exists-check and throws
+          # EEXIST on macOS (electron-userland/electron-builder#3179,
+          # #7093, #6570). Forces real copies instead of hardlinks.
+          USE_HARD_LINKS: false
 
       # Tag builds publish installers straight to the GitHub Release (above) —
       # that's the real deliverable and doesn't count against Actions storage
