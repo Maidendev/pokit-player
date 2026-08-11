@@ -58,8 +58,13 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: false
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # Tag builds publish installers straight to the GitHub Release (above) —
+      # that's the real deliverable and doesn't count against Actions storage
+      # quota. This upload is just a short-lived preview for push/PR builds.
       - uses: actions/upload-artifact@v4
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.paths }}
           if-no-files-found: error
+          retention-days: 5
