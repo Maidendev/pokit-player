@@ -1,6 +1,6 @@
 {
   "name": "pokitplayer",
-  "version": "1.1.6",
+  "version": "1.1.7",
   "description": "PokitPlayer — A professional cross-platform video player with instant streaming playback for ProRes/DNxHD/DNxHR, QuickTime shortcuts, timecode display, and file info viewer.",
   "main": "src/main.js",
   "repository": {
@@ -92,13 +92,6 @@
       "target": [
         {
           "target": "dmg",
-          "arch": [
-            "x64",
-            "arm64"
-          ]
-        },
-        {
-          "target": "zip",
           "arch": [
             "x64",
             "arm64"

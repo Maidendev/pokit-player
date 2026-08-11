@@ -28,8 +28,6 @@ jobs:
             artifact: macos-installers
             paths: |
               dist/*.dmg
-              dist/*.zip
-              dist/latest-mac.yml
 
     runs-on: ${{ matrix.os }}
 
