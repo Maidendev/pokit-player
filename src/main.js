@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const transcoder = require('./transcoder');
 const { StreamDecoder } = require('./stream-decoder');
+const { autoUpdater } = require('electron-updater');
 
 let mainWindow = null;
 let streamDecoder = null; // Singleton stream decoder instance
@@ -219,12 +220,17 @@ function buildMenu() {
         },
         { type: 'separator' },
         {
+          label: 'Check for Updates…',
+          click: () => checkForUpdates(true),
+        },
+        { type: 'separator' },
+        {
           label: 'About',
           click: () => {
             dialog.showMessageBox(mainWindow, {
               type: 'info',
               title: 'About PokitPlayer',
-              message: 'PokitPlayer v1.1.3',
+              message: `PokitPlayer v${app.getVersion()}`,
               detail:
                 'A professional cross-platform video player.\n' +
                 'Supports ProRes, DNxHD/DNxHR, image sequences, and more.\n' +
@@ -490,6 +496,50 @@ ipcMain.handle('set-window-size', (_event, width, height) => {
 });
 
 // ──────────────────────────────────────────────
+// Auto-update (GitHub Releases via electron-updater)
+// ──────────────────────────────────────────────
+
+autoUpdater.autoDownload = true;
+autoUpdater.autoInstallOnAppQuit = true;
+
+autoUpdater.on('error', (err) => {
+  console.error('[Updater] error:', err.message);
+});
+
+autoUpdater.on('update-downloaded', (info) => {
+  if (!mainWindow) return;
+  dialog
+    .showMessageBox(mainWindow, {
+      type: 'info',
+      title: 'Update Ready',
+      message: `PokitPlayer ${info.version} has been downloaded.`,
+      detail: 'Restart now to install it, or it will install automatically on quit.',
+      buttons: ['Restart Now', 'Later'],
+      defaultId: 0,
+      cancelId: 1,
+    })
+    .then(({ response }) => {
+      if (response === 0) autoUpdater.quitAndInstall();
+    });
+});
+
+function checkForUpdates(showNoUpdateDialog) {
+  // electron-updater errors out on unsigned/unpackaged (dev) runs — don't let
+  // an update check crash the app.
+  autoUpdater.checkForUpdates().catch((err) => {
+    console.error('[Updater] check failed:', err.message);
+    if (showNoUpdateDialog && mainWindow) {
+      dialog.showMessageBox(mainWindow, {
+        type: 'error',
+        title: 'Update Check Failed',
+        message: 'Could not check for updates.',
+        detail: err.message,
+      });
+    }
+  });
+}
+
+// ──────────────────────────────────────────────
 // App lifecycle
 // ──────────────────────────────────────────────
 
@@ -499,7 +549,10 @@ if (process.platform === 'win32') {
   app.setAppUserModelId('com.pokitplayer.app');
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+  createWindow();
+  if (app.isPackaged) checkForUpdates(false);
+});
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
