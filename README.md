@@ -37,6 +37,7 @@ A professional, cross-platform desktop video player built with Electron. Feature
 | Shortcut | Action |
 |---|---|
 | `Space` | Play / Pause |
+| `J` / `K` / `L` | Shuttle backward / stop / forward (Premiere/FCP-style — tap J or L again to ramp speed 2x–8x) |
 | `←` / `→` | Skip 5 seconds backward / forward |
 | `⌘←` / `⌘→` (or `Ctrl`) | Frame-by-frame backward / forward |
 | `↑` / `↓` | Volume up / down |

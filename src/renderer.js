@@ -94,6 +94,13 @@
   let pendingSequenceInfo = null;
   let wasTranscoded = false;
 
+  // ─── JKL Shuttle State ──────────────────────────────────
+  const SHUTTLE_MAX_SPEED = 8;
+  let shuttleDirection = 0;   // -1 reverse, 0 stopped, 1 forward
+  let shuttleSpeed = 1;       // speed multiplier, doubles with repeated J/L presses
+  let shuttleRAF = null;      // requestAnimationFrame handle driving reverse playback
+  let shuttleLastTs = null;
+
   // ─── Source Timecode Offset (v1.1.1) ───────────────────
   let sourceTimecodeOffset = 0;   // Offset in seconds from embedded timecode
   let sourceTimecodeStr = null;   // Original timecode string e.g. "01:00:00:00"
@@ -916,34 +923,107 @@
 
   function togglePlay() {
     if (!hasVideoLoaded) return;
-    if (video.paused || video.ended) {
-      video.play();
+    if (shuttleDirection !== 0 || (!video.paused && !video.ended)) {
+      stopShuttle();
     } else {
-      video.pause();
+      video.playbackRate = 1;
+      video.play();
     }
+  }
+
+  function seekTo(time) {
+    const duration = (currentProbeInfo && currentProbeInfo.duration) || video.duration || Infinity;
+    const target = Math.max(0, Math.min(duration, time));
+    if (streamMode) {
+      seekInStream(target);
+    } else {
+      video.currentTime = target;
+    }
+    return target;
   }
 
   function seekRelative(seconds) {
     if (!hasVideoLoaded) return;
-    const target = Math.max(0, Math.min(video.duration || Infinity, video.currentTime + seconds));
-    if (streamMode) {
-      seekInStream(target);
-    } else {
-      video.currentTime = target;
-    }
+    seekTo(video.currentTime + seconds);
   }
 
   function frameStep(direction) {
     if (!hasVideoLoaded) return;
-    video.pause();
+    stopShuttle();
     const step = direction * frameDuration;
-    const target = Math.max(0, Math.min(video.duration || Infinity, video.currentTime + step));
-    if (streamMode) {
-      // For frame stepping, try direct seek first (likely within buffer)
-      seekInStream(target);
-    } else {
-      video.currentTime = target;
+    seekTo(video.currentTime + step);
+  }
+
+  // ─── JKL Shuttle (Premiere/FCP-style J/K/L) ────────────
+
+  function stopShuttle() {
+    if (shuttleRAF) {
+      cancelAnimationFrame(shuttleRAF);
+      shuttleRAF = null;
     }
+    shuttleLastTs = null;
+    shuttleDirection = 0;
+    shuttleSpeed = 1;
+    video.playbackRate = 1;
+    video.pause();
+  }
+
+  function shuttleForward() {
+    if (!hasVideoLoaded) return;
+    if (shuttleDirection === 1) {
+      shuttleSpeed = Math.min(shuttleSpeed * 2, SHUTTLE_MAX_SPEED);
+    } else {
+      // Coming from stopped or reverse — always restart at base speed.
+      cancelReverseLoop();
+      shuttleDirection = 1;
+      shuttleSpeed = 1;
+    }
+    video.playbackRate = shuttleSpeed;
+    if (video.paused || video.ended) video.play();
+  }
+
+  function shuttleBackward() {
+    if (!hasVideoLoaded) return;
+    video.pause(); // <video> has no native reverse playback — driven manually below
+    if (shuttleDirection === -1) {
+      shuttleSpeed = Math.min(shuttleSpeed * 2, SHUTTLE_MAX_SPEED);
+    } else {
+      shuttleDirection = -1;
+      shuttleSpeed = 1;
+    }
+    startReverseLoop();
+  }
+
+  function startReverseLoop() {
+    if (shuttleRAF) return; // already running — shuttleSpeed changes are picked up live
+    shuttleLastTs = null;
+    const tick = (ts) => {
+      if (shuttleDirection !== -1) {
+        shuttleRAF = null;
+        return;
+      }
+      if (shuttleLastTs !== null) {
+        const dt = (ts - shuttleLastTs) / 1000;
+        const target = video.currentTime - dt * shuttleSpeed;
+        if (target <= 0) {
+          seekTo(0);
+          stopShuttle();
+          return;
+        }
+        seekTo(target);
+      }
+      shuttleLastTs = ts;
+      shuttleRAF = requestAnimationFrame(tick);
+    };
+    shuttleRAF = requestAnimationFrame(tick);
+  }
+
+  function cancelReverseLoop() {
+    if (shuttleRAF) {
+      cancelAnimationFrame(shuttleRAF);
+      shuttleRAF = null;
+    }
+    shuttleLastTs = null;
   }
 
   function setVolume(val) {
@@ -1190,7 +1270,13 @@
 
   video.addEventListener('play', () => { updatePlayButton(); showControls(); });
   video.addEventListener('pause', () => { updatePlayButton(); showControls(); clearTimeout(controlsTimeout); });
-  video.addEventListener('ended', () => { updatePlayButton(); showControls(); });
+  video.addEventListener('ended', () => {
+    shuttleDirection = 0;
+    shuttleSpeed = 1;
+    video.playbackRate = 1;
+    updatePlayButton();
+    showControls();
+  });
   video.addEventListener('timeupdate', () => { updateTimecode(); updateTimeline(); updateBuffered(); });
   video.addEventListener('loadedmetadata', () => {
     console.log('[Renderer] Video metadata loaded:', video.videoWidth + 'x' + video.videoHeight, 'duration:', video.duration);
@@ -1258,6 +1344,9 @@
         break;
       case 'ArrowUp': e.preventDefault(); changeVolume(0.05); break;
       case 'ArrowDown': e.preventDefault(); changeVolume(-0.05); break;
+      case 'j': if (!e.ctrlKey && !e.metaKey && !e.repeat) { e.preventDefault(); shuttleBackward(); } break;
+      case 'k': if (!e.ctrlKey && !e.metaKey && !e.repeat) { e.preventDefault(); togglePlay(); } break;
+      case 'l': if (!e.ctrlKey && !e.metaKey && !e.repeat) { e.preventDefault(); shuttleForward(); } break;
       case 'f': if (!e.ctrlKey && !e.metaKey) { e.preventDefault(); toggleFullscreen(); } break;
       case 'm': if (!e.ctrlKey && !e.metaKey) { e.preventDefault(); toggleMute(); } break;
       case 'Escape':
