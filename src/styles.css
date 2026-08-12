@@ -536,6 +536,319 @@ html, body {
   font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
 }
 
+/* Caption overlay */
+#caption-overlay {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 10%;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 20;
+  padding: 0 8%;
+}
+
+#caption-text {
+  /* Broadcast convention: white on a translucent black box, centred */
+  background: rgba(0, 0, 0, 0.75);
+  color: #fff;
+  font-size: clamp(14px, 2.4vw, 30px);
+  line-height: 1.35;
+  padding: 4px 12px;
+  border-radius: 3px;
+  text-align: center;
+  white-space: pre-wrap;
+  max-width: 100%;
+}
+
+/* Sync-check bar */
+#sync-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 5px 16px;
+  font-size: 11px;
+  color: var(--text-muted);
+  border-top: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+}
+
+#sync-source {
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  color: var(--text-primary);
+}
+
+.sync-offset {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.sync-offset button {
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.15));
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  line-height: 1;
+}
+
+#sync-offset-value {
+  width: 52px;
+  background: rgba(0, 0, 0, 0.4);
+  color: var(--text-primary);
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.15));
+  border-radius: 3px;
+  padding: 2px 4px;
+  font-size: 11px;
+  text-align: right;
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+}
+
+#sync-offset-ms {
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  min-width: 62px;
+}
+
+/* Audio Meters & Loudness panel */
+#audio-panel {
+  position: absolute;
+  top: 48px;
+  right: 16px;
+  width: 420px;
+  max-height: calc(100% - 140px);
+  overflow-y: auto;
+  background: var(--bg-panel, rgba(28, 28, 30, 0.97));
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  z-index: 60;
+}
+
+#meter-rack {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+  padding: 4px 0 8px;
+  overflow-x: auto;
+}
+
+.meter-strip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  min-width: 34px;
+}
+
+.meter-bar {
+  position: relative;
+  width: 18px;
+  height: 120px;
+  background: rgba(0, 0, 0, 0.45);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.meter-fill {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 0;
+  background: linear-gradient(to top, #2ecc71 0%, #2ecc71 65%, #f1c40f 85%, #e74c3c 100%);
+  transition: height 0.05s linear;
+}
+
+.meter-fill.over {
+  background: #e74c3c;
+}
+
+.meter-peak {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.meter-label,
+.meter-value {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+}
+
+.meter-btns {
+  display: flex;
+  gap: 2px;
+}
+
+.meter-btns button {
+  width: 16px;
+  height: 16px;
+  font-size: 9px;
+  line-height: 1;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.15));
+  border-radius: 2px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.meter-btns button.active {
+  background: var(--accent);
+  color: #000;
+  border-color: var(--accent);
+}
+
+#meter-note {
+  font-size: 10px;
+  color: var(--text-muted);
+  opacity: 0.75;
+  margin-bottom: 4px;
+}
+
+.loudness-controls {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.loudness-controls label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.loudness-controls select {
+  background: rgba(0, 0, 0, 0.4);
+  color: var(--text-primary);
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.15));
+  border-radius: 3px;
+  padding: 3px 5px;
+  font-size: 11px;
+}
+
+.ctrl-btn-text {
+  background: var(--accent);
+  color: #000;
+  border: none;
+  border-radius: 3px;
+  padding: 5px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ctrl-btn-text:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+#loudness-progress {
+  height: 3px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
+  margin-bottom: 8px;
+  overflow: hidden;
+}
+
+#loudness-progress-bar {
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  transition: width 0.2s linear;
+}
+
+.loudness-pass { color: #2ecc71; }
+.loudness-fail { color: #e74c3c; }
+
+/* GOP / data-rate strip */
+#gop-strip-container {
+  padding: 2px 16px 6px;
+}
+
+#gop-strip {
+  display: block;
+  width: 100%;
+  height: 46px;
+  cursor: pointer;
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: 3px;
+}
+
+#gop-legend {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.gop-key {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.gop-swatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  display: inline-block;
+}
+
+.gop-i { background: #ff9f43; }
+.gop-p { background: #54a0ff; }
+.gop-b { background: #8e8e93; }
+
+#gop-status {
+  margin-left: auto;
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+}
+
+/* Properties the file doesn't carry — present but visibly empty */
+.info-value-absent {
+  color: var(--text-muted);
+  opacity: 0.6;
+}
+
+/* Advanced descriptors: collapsed by default to keep the panel readable */
+.info-advanced > summary {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--accent);
+  margin-bottom: 8px;
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+}
+
+.info-advanced > summary::before {
+  content: '▸ ';
+  display: inline-block;
+  transition: transform 0.15s ease;
+}
+
+.info-advanced[open] > summary::before {
+  content: '▾ ';
+}
+
+.info-advanced > summary::-webkit-details-marker {
+  display: none;
+}
+
 /* Shortcuts Panel */
 .shortcut-row {
   display: flex;

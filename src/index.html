@@ -18,6 +18,9 @@
     <!-- Main Video Area -->
     <div id="video-container">
       <video id="video-player" preload="auto"></video>
+      <!-- Caption overlay: rendered over picture, outside the video element so
+           it survives transcoded and MSE-streamed playback alike -->
+      <div id="caption-overlay" class="hidden"><div id="caption-text"></div></div>
 
       <!-- Drop Zone Overlay -->
       <div id="drop-zone" class="visible">
@@ -103,6 +106,31 @@
         <div id="timeline-tooltip" class="hidden">00:00:00:00</div>
       </div>
 
+      <!-- Sync-check bar: appears once a caption or secondary audio file loads -->
+      <div id="sync-bar" class="hidden">
+        <span id="sync-source">—</span>
+        <label class="sync-offset">Offset
+          <button id="btn-offset-minus" title="Nudge one frame earlier">−</button>
+          <input type="number" id="sync-offset-value" value="0" step="1">
+          <span class="sync-unit">frames</span>
+          <button id="btn-offset-plus" title="Nudge one frame later">+</button>
+        </label>
+        <span id="sync-offset-ms">0 ms</span>
+        <button id="btn-toggle-captions" class="ctrl-btn-text">Hide Captions</button>
+        <button id="btn-clear-sync" class="ctrl-btn-text">Clear</button>
+      </div>
+
+      <!-- GOP structure + per-frame data rate for the window around the playhead -->
+      <div id="gop-strip-container" class="hidden">
+        <canvas id="gop-strip" height="46"></canvas>
+        <div id="gop-legend">
+          <span class="gop-key"><i class="gop-swatch gop-i"></i>I</span>
+          <span class="gop-key"><i class="gop-swatch gop-p"></i>P</span>
+          <span class="gop-key"><i class="gop-swatch gop-b"></i>B</span>
+          <span id="gop-status">—</span>
+        </div>
+      </div>
+
       <!-- Controls Row -->
       <div id="controls-row">
         <!-- Left: Playback controls -->
@@ -174,6 +202,52 @@
           <h4>Audio</h4>
           <div class="info-grid" id="info-audio"></div>
         </div>
+        <div class="info-section hidden" id="info-section-captions">
+          <h4>Captions &amp; Subtitles</h4>
+          <div class="info-grid" id="info-captions"></div>
+        </div>
+        <!-- Deep descriptors stay collapsed so the default view stays readable -->
+        <details class="info-section info-advanced" id="info-section-advanced">
+          <summary>Advanced</summary>
+          <div class="info-grid" id="info-advanced"></div>
+        </details>
+      </div>
+    </div>
+
+    <!-- Audio Meters & Loudness Panel -->
+    <div id="audio-panel" class="hidden">
+      <div class="info-panel-header">
+        <h3>Audio Meters &amp; Loudness</h3>
+        <button id="btn-close-audio" class="ctrl-btn">&times;</button>
+      </div>
+      <div class="info-panel-body">
+        <div class="info-section">
+          <h4>Per-Channel Meters</h4>
+          <div id="meter-rack"></div>
+          <div id="meter-note">Live meters are indicative. Use the loudness analysis below for a spec-grade measurement.</div>
+        </div>
+        <div class="info-section">
+          <h4>Program Loudness (ITU-R BS.1770)</h4>
+          <div class="loudness-controls">
+            <label>Target
+              <select id="loudness-target">
+                <option value="ebu-r128">EBU R128 (−23 LUFS)</option>
+                <option value="atsc-a85">ATSC A/85 / CALM (−24 LKFS)</option>
+              </select>
+            </label>
+            <label>Gating
+              <select id="loudness-gating">
+                <option value="gated">Gated (BS.1770-3/-4)</option>
+                <option value="ungated">Ungated (BS.1770-2)</option>
+              </select>
+            </label>
+            <button id="btn-analyze-loudness" class="ctrl-btn-text">Analyze</button>
+          </div>
+          <div id="loudness-progress" class="hidden">
+            <div id="loudness-progress-bar"></div>
+          </div>
+          <div class="info-grid" id="loudness-results"></div>
+        </div>
       </div>
     </div>
 
@@ -184,8 +258,9 @@
         <button id="btn-close-shortcuts" class="ctrl-btn">&times;</button>
       </div>
       <div class="info-panel-body">
-        <div class="shortcut-row"><kbd>Space</kbd><span>Play / Pause</span></div>
-        <div class="shortcut-row"><kbd>J</kbd> / <kbd>K</kbd> / <kbd>L</kbd><span>Shuttle back / stop / forward — tap J or L again to speed up (2x–8x)</span></div>
+        <div class="shortcut-row"><kbd>Space</kbd> / <kbd>K</kbd><span>Play / Pause</span></div>
+        <div class="shortcut-row"><kbd>J</kbd> / <kbd>L</kbd><span>Shuttle back / forward — tap again to speed up (2x–8x), tap the other key to step back down</span></div>
+        <div class="shortcut-row"><kbd>K</kbd>+<kbd>J</kbd> / <kbd>K</kbd>+<kbd>L</kbd><span>Slow shuttle (half speed)</span></div>
         <div class="shortcut-row"><kbd>←</kbd> / <kbd>→</kbd><span>Skip 5s back / forward</span></div>
         <div class="shortcut-row"><kbd>⌘←</kbd> / <kbd>⌘→</kbd><span>Frame back / forward</span></div>
         <div class="shortcut-row"><kbd>↑</kbd> / <kbd>↓</kbd><span>Volume up / down</span></div>
@@ -194,6 +269,10 @@
         <div class="shortcut-row"><kbd>0</kbd>–<kbd>9</kbd><span>Jump to 0%–90%</span></div>
         <div class="shortcut-row"><kbd>⌘O</kbd><span>Open file</span></div>
         <div class="shortcut-row"><kbd>⌘I</kbd><span>File information</span></div>
+        <div class="shortcut-row"><kbd>⌘G</kbd><span>GOP / data rate strip</span></div>
+        <div class="shortcut-row"><kbd>⌘L</kbd><span>Audio meters &amp; loudness</span></div>
+        <div class="shortcut-row"><kbd>⌘⇧C</kbd><span>Load caption / subtitle file</span></div>
+        <div class="shortcut-row"><kbd>⌘⇧A</kbd><span>Load secondary audio</span></div>
       </div>
     </div>
   </div>

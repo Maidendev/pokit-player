@@ -926,6 +926,10 @@
     if (shuttleDirection !== 0 || (!video.paused && !video.ended)) {
       stopShuttle();
     } else {
+      // Normal playback is the 1x forward notch of the shuttle ladder, so a
+      // following L steps to 2x rather than restarting at 1x.
+      shuttleDirection = 1;
+      shuttleSpeed = 1;
       video.playbackRate = 1;
       video.play();
     }
@@ -966,33 +970,50 @@
     shuttleSpeed = 1;
     video.playbackRate = 1;
     video.pause();
+    updatePlayButton(); // reverse shuttle leaves <video> paused, so no pause event fires
   }
 
-  function shuttleForward() {
+  // Speed ladder shared by J and L, matching the Premiere Pro shuttle notches:
+  // a press in the direction of travel doubles the speed (1x → 2x → 4x → 8x),
+  // a press against it steps one notch back down, and 1x steps straight through
+  // to 1x the other way instead of stopping — which is also what Final Cut does
+  // from a standing start. K (or Space) is the only thing that stops playback.
+  function stepShuttle(dir) {
     if (!hasVideoLoaded) return;
+    if (shuttleDirection === dir) {
+      shuttleSpeed = Math.min(shuttleSpeed * 2, SHUTTLE_MAX_SPEED);
+    } else if (shuttleDirection === 0 || shuttleSpeed <= 1) {
+      shuttleDirection = dir;
+      shuttleSpeed = 1;
+    } else {
+      shuttleSpeed = shuttleSpeed / 2; // stepping back toward a stop
+    }
+    applyShuttle();
+  }
+
+  // K held down + J/L is the Premiere/FCP slow shuttle: half speed, no ladder.
+  function slowShuttle(dir) {
+    if (!hasVideoLoaded) return;
+    shuttleDirection = dir;
+    shuttleSpeed = 0.5;
+    applyShuttle();
+  }
+
+  function applyShuttle() {
     if (shuttleDirection === 1) {
-      shuttleSpeed = Math.min(shuttleSpeed * 2, SHUTTLE_MAX_SPEED);
-    } else {
-      // Coming from stopped or reverse — always restart at base speed.
       cancelReverseLoop();
-      shuttleDirection = 1;
-      shuttleSpeed = 1;
+      video.playbackRate = shuttleSpeed;
+      if (video.paused || video.ended) video.play();
+    } else if (shuttleDirection === -1) {
+      video.pause(); // <video> has no native reverse playback — driven by rAF
+      video.playbackRate = 1;
+      startReverseLoop();
     }
-    video.playbackRate = shuttleSpeed;
-    if (video.paused || video.ended) video.play();
+    updatePlayButton();
   }
 
-  function shuttleBackward() {
-    if (!hasVideoLoaded) return;
-    video.pause(); // <video> has no native reverse playback — driven manually below
-    if (shuttleDirection === -1) {
-      shuttleSpeed = Math.min(shuttleSpeed * 2, SHUTTLE_MAX_SPEED);
-    } else {
-      shuttleDirection = -1;
-      shuttleSpeed = 1;
-    }
-    startReverseLoop();
-  }
+  function shuttleForward() { stepShuttle(1); }
+  function shuttleBackward() { stepShuttle(-1); }
 
   function startReverseLoop() {
     if (shuttleRAF) return; // already running — shuttleSpeed changes are picked up live
@@ -1080,7 +1101,8 @@
   // ─── UI Updates ───────────────────────────────────────
 
   function updatePlayButton() {
-    const playing = !video.paused && !video.ended;
+    // Reverse shuttle drives a paused <video> by hand — still "playing" to the UI.
+    const playing = shuttleDirection !== 0 || (!video.paused && !video.ended);
     iconPlay.classList.toggle('hidden', playing);
     iconPause.classList.toggle('hidden', !playing);
     bigPlayBtn.classList.toggle('hidden', playing);
@@ -1268,8 +1290,13 @@
 
   // ─── Video Events ─────────────────────────────────────
 
-  video.addEventListener('play', () => { updatePlayButton(); showControls(); });
-  video.addEventListener('pause', () => { updatePlayButton(); showControls(); clearTimeout(controlsTimeout); });
+  video.addEventListener('play', () => {
+    updatePlayButton(); showControls(); resyncSecondaryAudio(true);
+  });
+  video.addEventListener('pause', () => {
+    updatePlayButton(); showControls(); clearTimeout(controlsTimeout);
+    if (secondaryAudio) secondaryAudio.pause();
+  });
   video.addEventListener('ended', () => {
     shuttleDirection = 0;
     shuttleSpeed = 1;
@@ -1277,7 +1304,17 @@
     updatePlayButton();
     showControls();
   });
-  video.addEventListener('timeupdate', () => { updateTimecode(); updateTimeline(); updateBuffered(); });
+  video.addEventListener('timeupdate', () => {
+    updateTimecode(); updateTimeline(); updateBuffered();
+    if (gopVisible) refreshGopStrip();
+    updateCaptionOverlay();
+    resyncSecondaryAudio();
+  });
+  video.addEventListener('seeked', () => {
+    activeCueIndex = -1;          // a seek can land anywhere in the cue list
+    updateCaptionOverlay();
+    resyncSecondaryAudio(true);
+  });
   video.addEventListener('loadedmetadata', () => {
     console.log('[Renderer] Video metadata loaded:', video.videoWidth + 'x' + video.videoHeight, 'duration:', video.duration);
     updateTimecode();
@@ -1291,9 +1328,12 @@
 
   // ─── Drag & Drop ──────────────────────────────────────
 
+  // Keep in sync with VIDEO_EXTENSIONS in main.js.
   const SUPPORTED_EXTENSIONS = [
     '.mp4', '.webm', '.mkv', '.avi', '.mov', '.m4v', '.ogv', '.ogg',
     '.flv', '.wmv', '.mpg', '.mpeg', '.mxf',
+    '.ts', '.m2ts', '.mts', '.m2v', '.mpv', '.vob', '.gxf', '.asf', '.mj2',
+    '.3gp', '.3g2',
     '.dpx', '.exr', '.tif', '.tiff', '.png', '.jpg', '.jpeg',
   ];
 
@@ -1322,8 +1362,15 @@
 
   // ─── Keyboard Shortcuts ───────────────────────────────
 
+  let kHeld = false; // K held down turns J/L into the slow (half speed) shuttle
+
+  function isTypingTarget(el) {
+    return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' ||
+      el.tagName === 'SELECT' || el.isContentEditable);
+  }
+
   document.addEventListener('keydown', (e) => {
-    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
+    if (isTypingTarget(e.target)) return;
 
     if (e.key >= '0' && e.key <= '9' && !e.ctrlKey && !e.metaKey && !e.altKey) {
       e.preventDefault();
@@ -1331,9 +1378,21 @@
       return;
     }
 
-    switch (e.key) {
-      case ' ':
-        e.preventDefault(); togglePlay(); break;
+    // e.code, not e.key: layout- and Caps Lock-proof, and Space arrives as ' '.
+    const mod = e.ctrlKey || e.metaKey || e.altKey;
+
+    // Space also activates whatever button has focus, so a click on the play
+    // button followed by Space would toggle twice and look like a dead key.
+    if (e.code === 'Space' && !mod) {
+      e.preventDefault();
+      if (document.activeElement && document.activeElement !== document.body) {
+        document.activeElement.blur();
+      }
+      if (!e.repeat) togglePlay();
+      return;
+    }
+
+    switch (e.code) {
       case 'ArrowLeft':
         e.preventDefault();
         if (e.ctrlKey || e.metaKey) frameStep(-1); else seekRelative(-5);
@@ -1344,18 +1403,35 @@
         break;
       case 'ArrowUp': e.preventDefault(); changeVolume(0.05); break;
       case 'ArrowDown': e.preventDefault(); changeVolume(-0.05); break;
-      case 'j': if (!e.ctrlKey && !e.metaKey && !e.repeat) { e.preventDefault(); shuttleBackward(); } break;
-      case 'k': if (!e.ctrlKey && !e.metaKey && !e.repeat) { e.preventDefault(); togglePlay(); } break;
-      case 'l': if (!e.ctrlKey && !e.metaKey && !e.repeat) { e.preventDefault(); shuttleForward(); } break;
-      case 'f': if (!e.ctrlKey && !e.metaKey) { e.preventDefault(); toggleFullscreen(); } break;
-      case 'm': if (!e.ctrlKey && !e.metaKey) { e.preventDefault(); toggleMute(); } break;
+      // J/K/L ignore auto-repeat: holding L must not run up the speed ladder.
+      case 'KeyJ':
+        if (!mod && !e.repeat) { e.preventDefault(); if (kHeld) slowShuttle(-1); else shuttleBackward(); }
+        break;
+      case 'KeyK':
+        if (!mod) {
+          e.preventDefault();
+          if (!e.repeat) { kHeld = true; togglePlay(); }
+        }
+        break;
+      case 'KeyL':
+        if (!mod && !e.repeat) { e.preventDefault(); if (kHeld) slowShuttle(1); else shuttleForward(); }
+        break;
+      case 'KeyF': if (!mod) { e.preventDefault(); toggleFullscreen(); } break;
+      case 'KeyM': if (!mod) { e.preventDefault(); toggleMute(); } break;
       case 'Escape':
         fileInfoPanel.classList.add('hidden');
         shortcutsPanel.classList.add('hidden');
+        audioPanel.classList.add('hidden');
         hideSequenceDialog();
         break;
     }
   });
+
+  document.addEventListener('keyup', (e) => {
+    if (e.code === 'KeyK') kHeld = false;
+  });
+  // A dropped keyup (window blur mid-hold) would leave K stuck down.
+  window.addEventListener('blur', () => { kHeld = false; });
 
   // ─── IPC from Main Process ────────────────────────────
 
@@ -1369,6 +1445,9 @@
   });
 
   window.electronAPI.onPlaybackToggle(() => togglePlay());
+  window.electronAPI.onShuttle((direction) => stepShuttle(direction));
+  window.electronAPI.onToggleGopStrip(() => toggleGopStrip());
+  window.electronAPI.onToggleAudioPanel(() => toggleAudioPanel());
   window.electronAPI.onSeekRelative((seconds) => seekRelative(seconds));
   window.electronAPI.onFrameStep((direction) => frameStep(direction));
   window.electronAPI.onVolumeChange((delta) => changeVolume(delta));
@@ -1392,6 +1471,11 @@
 
   // ─── File Info ────────────────────────────────────────
 
+  // Deep ffprobe inspection for the current file; null until it resolves, and
+  // stays null when ffprobe is unavailable (the panel falls back to the
+  // lightweight playback probe in that case).
+  let currentInspection = null;
+
   async function loadFileInfo(filePath) {
     console.log('[Renderer] Loading file info for:', filePath);
     const stats = await window.electronAPI.getFileStats(filePath);
@@ -1409,11 +1493,196 @@
     addInfoRow(generalGrid, 'Modified', new Date(stats.modified).toLocaleString());
 
     updateFileInfoFromVideo();
+
+    // Inspection runs its own ffprobe passes, so let the panel paint first and
+    // fill in the deep detail when it lands.
+    currentInspection = null;
+    try {
+      const inspection = await window.electronAPI.inspectFile(filePath);
+      if (inspection && !inspection.error) {
+        currentInspection = inspection;
+
+        // ffprobe's r_frame_rate is authoritative; the stderr scrape in
+        // transcoder.js reads the field rate on some containers (GXF reports
+        // 50 for 25p), which would double every timecode and frame step.
+        const probedRate = inspection.video[0] && inspection.video[0].frameRate;
+        if (probedRate && Math.abs(probedRate - frameRate) > 0.01) {
+          console.log('[Renderer] Frame rate corrected from', frameRate, 'to', probedRate);
+          frameRate = probedRate;
+          frameDuration = 1 / frameRate;
+          updateTimecode();
+        }
+      } else if (inspection && inspection.error) {
+        console.warn('[Renderer] Inspection failed:', inspection.error);
+      }
+    } catch (err) {
+      console.warn('[Renderer] Inspection threw:', err.message);
+    }
+    updateFileInfoFromVideo();
+  }
+
+  // ─── Inspector rendering helpers ──────────────────────
+
+  function formatBitrate(bps) {
+    if (!bps) return null;
+    if (bps >= 1e9) return (bps / 1e9).toFixed(1) + ' Gb/s';
+    if (bps >= 1e6) return (bps / 1e6).toFixed(1) + ' Mb/s';
+    return Math.round(bps / 1000) + ' kb/s';
+  }
+
+  function formatSampleRate(hz) {
+    return hz ? (hz / 1000) + ' kHz' : null;
+  }
+
+  /**
+   * Render the deep-inspection model. Summary sections stay tight; the deep
+   * container/HDR/PID descriptors go in the collapsed Advanced section.
+   */
+  function renderInspection(inspection) {
+    const videoGrid = document.getElementById('info-video');
+    const audioGrid = document.getElementById('info-audio');
+    const capGrid = document.getElementById('info-captions');
+    const advGrid = document.getElementById('info-advanced');
+    const capSection = document.getElementById('info-section-captions');
+    videoGrid.innerHTML = '';
+    audioGrid.innerHTML = '';
+    capGrid.innerHTML = '';
+    advGrid.innerHTML = '';
+
+    const c = inspection.container;
+
+    // ── Video ──
+    inspection.video.forEach((v, i) => {
+      const prefix = inspection.video.length > 1 ? 'V' + (i + 1) + ' ' : '';
+      addInfoRow(videoGrid, prefix + 'Codec', v.codecFriendly);
+      if (v.level) addInfoRow(videoGrid, prefix + 'Level', String(v.level / 10));
+      addInfoRow(videoGrid, prefix + 'Resolution',
+        v.width && v.height ? v.width + ' × ' + v.height : null);
+      addInfoRow(videoGrid, prefix + 'Display Aspect', v.displayAspectRatio);
+      addInfoRow(videoGrid, prefix + 'Pixel Aspect', v.pixelAspectRatio);
+      if (v.cleanAperture) {
+        addInfoRow(videoGrid, prefix + 'Clean Aperture',
+          v.cleanAperture.width + ' × ' + v.cleanAperture.height +
+          ' (' + v.cleanAperture.source + ')');
+      } else {
+        addInfoRow(videoGrid, prefix + 'Clean Aperture', null);
+      }
+      addInfoRow(videoGrid, prefix + 'Frame Rate', v.frameRate ? v.frameRate + ' fps' : null);
+      addInfoRow(videoGrid, prefix + 'Scan Type', v.scanType);
+      addInfoRow(videoGrid, prefix + 'Bit Depth', v.bitDepth ? v.bitDepth + '-bit' : null);
+      addInfoRow(videoGrid, prefix + 'Chroma', v.chromaSubsampling);
+      addInfoRow(videoGrid, prefix + 'Color Primaries', v.colorPrimaries);
+      addInfoRow(videoGrid, prefix + 'Transfer', v.colorTransfer);
+      addInfoRow(videoGrid, prefix + 'Matrix', v.colorMatrix);
+      addInfoRow(videoGrid, prefix + 'Color Range', v.colorRange);
+      if (v.hdrFormat) addInfoRow(videoGrid, prefix + 'HDR', v.hdrFormat);
+      addInfoRow(videoGrid, prefix + 'Bitrate', formatBitrate(v.bitrate));
+      addInfoRow(videoGrid, prefix + 'GOP',
+        v.isIntraOnly ? 'Intra-only (all I-frames)' : 'Long-GOP (B-frames: ' + v.hasBFrames + ')');
+    });
+    if (!inspection.video.length) addInfoRow(videoGrid, 'Video', 'No video stream');
+
+    // ── Audio ──
+    inspection.audio.forEach((a, i) => {
+      const prefix = inspection.audio.length > 1 ? 'A' + (i + 1) + ' ' : '';
+      addInfoRow(audioGrid, prefix + 'Codec', a.codecFriendly);
+      addInfoRow(audioGrid, prefix + 'Channels',
+        a.channels ? a.channels + ' (' + (a.channelLayout || 'discrete') + ')' : null);
+      addInfoRow(audioGrid, prefix + 'Speakers', a.speakerLabels.join(' · '));
+      addInfoRow(audioGrid, prefix + 'Sample Rate', formatSampleRate(a.sampleRate));
+      addInfoRow(audioGrid, prefix + 'Bit Depth', a.bitDepth ? a.bitDepth + '-bit' : null);
+      addInfoRow(audioGrid, prefix + 'Bitrate', formatBitrate(a.bitrate));
+      if (a.language) addInfoRow(audioGrid, prefix + 'Language', a.language);
+      if (a.title) addInfoRow(audioGrid, prefix + 'Title', a.title);
+    });
+    if (!inspection.audio.length) addInfoRow(audioGrid, 'Audio', 'No audio stream');
+
+    // ── Captions / subtitles presence ──
+    const hasCaptions = inspection.subtitle.length > 0;
+    capSection.classList.toggle('hidden', !hasCaptions);
+    inspection.subtitle.forEach((s, i) => {
+      const flags = [];
+      if (s.isForced) flags.push('forced');
+      if (s.isHearingImpaired) flags.push('SDH / hearing impaired');
+      if (s.isVisualImpaired) flags.push('visually impaired');
+      addInfoRow(capGrid, 'Track ' + (i + 1),
+        (s.codecLongName || s.codec) +
+        (s.language ? ' · ' + s.language : '') +
+        (flags.length ? ' · ' + flags.join(', ') : ''));
+    });
+
+    // ── Advanced ──
+    addInfoRow(advGrid, 'Container', c.formatLongName || c.formatName);
+    addInfoRow(advGrid, 'Overall Bitrate', formatBitrate(c.bitrate));
+    addInfoRow(advGrid, 'Start Timecode', c.startTimecode);
+    addInfoRow(advGrid, 'Reel Name', c.reelName);
+    addInfoRow(advGrid, 'Streams', c.nbStreams != null ? String(c.nbStreams) : null);
+
+    inspection.video.forEach((v, i) => {
+      const prefix = inspection.video.length > 1 ? 'V' + (i + 1) + ' ' : 'Video ';
+      addInfoRow(advGrid, prefix + 'Pixel Format', v.pixelFormat);
+      addInfoRow(advGrid, prefix + 'Codec Tag', v.codecTag);
+      addInfoRow(advGrid, prefix + 'Field Order', v.fieldOrder);
+      if (v.codedWidth && (v.codedWidth !== v.width || v.codedHeight !== v.height)) {
+        addInfoRow(advGrid, prefix + 'Coded Size', v.codedWidth + ' × ' + v.codedHeight);
+      }
+      if (v.nbFrames) addInfoRow(advGrid, prefix + 'Frame Count', String(v.nbFrames));
+      const hdr = v.hdrMetadata;
+      if (hdr && hdr.masteringDisplay) {
+        const m = hdr.masteringDisplay;
+        addInfoRow(advGrid, prefix + 'Mastering Luminance',
+          m.minLuminance + ' – ' + m.maxLuminance + ' cd/m²');
+        addInfoRow(advGrid, prefix + 'Mastering Primaries',
+          'R(' + m.redX + ', ' + m.redY + ') G(' + m.greenX + ', ' + m.greenY + ') ' +
+          'B(' + m.blueX + ', ' + m.blueY + ') WP(' + m.whiteX + ', ' + m.whiteY + ')');
+      }
+      if (hdr && hdr.contentLightLevel) {
+        addInfoRow(advGrid, prefix + 'Content Light Level',
+          'MaxCLL ' + hdr.contentLightLevel.maxCLL + ' · MaxFALL ' + hdr.contentLightLevel.maxFALL);
+      }
+    });
+
+    // MPEG-TS program/PID structure
+    inspection.programs.forEach((p) => {
+      addInfoRow(advGrid, 'Program ' + p.programNum,
+        'PMT PID ' + p.pmtPid + ' · PCR PID ' + p.pcrPid +
+        ' · streams ' + p.streamIndexes.join(', '));
+    });
+
+    // Timecode tracks carried as data streams (MXF, MOV)
+    inspection.data.filter((d) => d.isTimecode).forEach((d, i) => {
+      addInfoRow(advGrid, 'Timecode Track ' + (i + 1), d.timecode);
+    });
+
+    if (inspection.chapters.length) {
+      addInfoRow(advGrid, 'Chapters', String(inspection.chapters.length));
+    }
+
+    // Container metadata, minus the tags already surfaced above
+    const skipTags = ['timecode', 'reel_name'];
+    Object.entries(c.tags || {})
+      .filter(([k]) => !skipTags.includes(k.toLowerCase()))
+      .slice(0, 20)
+      .forEach(([k, val]) => addInfoRow(advGrid, k, String(val)));
+
+    if (streamMode) {
+      addInfoRow(videoGrid, 'Playback', '⚡ Streaming decode');
+    } else if (wasTranscoded) {
+      addInfoRow(videoGrid, 'Playback', '✓ Transcoded to H.264');
+    }
   }
 
   function updateFileInfoFromVideo() {
+    // Deep inspection supersedes the lightweight playback probe once it lands.
+    if (currentInspection) {
+      renderInspection(currentInspection);
+      return;
+    }
+
     const videoGrid = document.getElementById('info-video');
     videoGrid.innerHTML = '';
+    document.getElementById('info-section-captions').classList.add('hidden');
+    document.getElementById('info-advanced').innerHTML = '';
 
     const probe = currentProbeInfo;
 
@@ -1496,8 +1765,11 @@
     labelEl.className = 'info-label';
     labelEl.textContent = label;
     const valueEl = document.createElement('span');
-    valueEl.className = 'info-value';
-    valueEl.textContent = value || 'N/A';
+    const absent = value === null || value === undefined || value === '';
+    // Absent properties read as an em dash rather than vanishing, so the panel
+    // distinguishes "not in this file" from "we didn't look".
+    valueEl.className = absent ? 'info-value info-value-absent' : 'info-value';
+    valueEl.textContent = absent ? '—' : value;
     container.appendChild(labelEl);
     container.appendChild(valueEl);
   }
@@ -1507,6 +1779,618 @@
     const d = gcd(w, h);
     return (w / d) + ':' + (h / d);
   }
+
+  // ─── Captions & Secondary Files (§3, §5) ──────────────
+  //
+  // Both features hang off the primary timeline clock: captions are cues keyed
+  // to it, secondary audio is an <audio> element slaved to it. They share one
+  // offset control so an operator can nudge either into alignment and confirm
+  // sync against picture.
+
+  const captionOverlay = document.getElementById('caption-overlay');
+  const captionText = document.getElementById('caption-text');
+  const syncBar = document.getElementById('sync-bar');
+  const syncSource = document.getElementById('sync-source');
+  const syncOffsetInput = document.getElementById('sync-offset-value');
+  const syncOffsetMs = document.getElementById('sync-offset-ms');
+  const btnOffsetMinus = document.getElementById('btn-offset-minus');
+  const btnOffsetPlus = document.getElementById('btn-offset-plus');
+  const btnToggleCaptions = document.getElementById('btn-toggle-captions');
+  const btnClearSync = document.getElementById('btn-clear-sync');
+
+  let captionTrack = null;      // { format, cues, path }
+  let captionsVisible = true;
+  let activeCueIndex = -1;
+  let syncOffsetFrames = 0;     // applies to captions and secondary audio alike
+  let secondaryAudio = null;    // HTMLAudioElement slaved to the video clock
+
+  function syncOffsetSeconds() {
+    return syncOffsetFrames * frameDuration;
+  }
+
+  function updateSyncBar() {
+    const active = captionTrack || secondaryAudio;
+    syncBar.classList.toggle('hidden', !active);
+    if (!active) return;
+
+    const parts = [];
+    if (captionTrack) {
+      parts.push(captionTrack.format + ' · ' + captionTrack.cues.length + ' cues');
+    }
+    if (secondaryAudio) {
+      parts.push('Secondary audio: ' + secondaryAudio.dataset.name);
+    }
+    syncSource.textContent = parts.join('  |  ');
+
+    syncOffsetInput.value = String(syncOffsetFrames);
+    syncOffsetMs.textContent = (syncOffsetSeconds() * 1000).toFixed(1) + ' ms';
+    btnToggleCaptions.classList.toggle('hidden', !captionTrack);
+    btnToggleCaptions.textContent = captionsVisible ? 'Hide Captions' : 'Show Captions';
+  }
+
+  /**
+   * Find and render the cue covering the current time. Cues are sorted, so a
+   * linear scan from the last hit is enough — this runs on every timeupdate.
+   */
+  function updateCaptionOverlay() {
+    if (!captionTrack || !captionsVisible) {
+      captionOverlay.classList.add('hidden');
+      return;
+    }
+
+    // A positive offset means the captions should appear LATER, so look up the
+    // cue list at an earlier time.
+    const t = video.currentTime - syncOffsetSeconds();
+    const cues = captionTrack.cues;
+
+    let index = -1;
+    for (let i = 0; i < cues.length; i++) {
+      if (t >= cues[i].start && t <= cues[i].end) { index = i; break; }
+      if (cues[i].start > t) break;   // sorted — nothing further can match
+    }
+
+    if (index === activeCueIndex) return;
+    activeCueIndex = index;
+
+    if (index === -1) {
+      captionOverlay.classList.add('hidden');
+      captionText.textContent = '';
+    } else {
+      captionText.textContent = cues[index].text;
+      captionOverlay.classList.remove('hidden');
+    }
+  }
+
+  function setSyncOffset(frames) {
+    syncOffsetFrames = frames;
+    activeCueIndex = -1;          // force the overlay to re-evaluate
+    if (secondaryAudio) resyncSecondaryAudio(true);
+    updateCaptionOverlay();
+    updateSyncBar();
+  }
+
+  btnOffsetMinus.addEventListener('click', () => setSyncOffset(syncOffsetFrames - 1));
+  btnOffsetPlus.addEventListener('click', () => setSyncOffset(syncOffsetFrames + 1));
+  syncOffsetInput.addEventListener('change', () => {
+    const v = parseInt(syncOffsetInput.value, 10);
+    setSyncOffset(isFinite(v) ? v : 0);
+  });
+
+  btnToggleCaptions.addEventListener('click', () => {
+    captionsVisible = !captionsVisible;
+    activeCueIndex = -1;
+    updateCaptionOverlay();
+    updateSyncBar();
+  });
+
+  btnClearSync.addEventListener('click', () => {
+    captionTrack = null;
+    activeCueIndex = -1;
+    captionOverlay.classList.add('hidden');
+    detachSecondaryAudio();
+    syncOffsetFrames = 0;
+    updateSyncBar();
+  });
+
+  async function loadCaptionSidecar() {
+    const filePath = await window.electronAPI.openCaptionDialog();
+    if (!filePath) return;
+
+    const result = await window.electronAPI.loadCaptionFile(filePath, frameRate);
+    if (result.error) {
+      alert('Could not load captions:\n\n' + result.error);
+      return;
+    }
+    captionTrack = result;
+    captionsVisible = true;
+    activeCueIndex = -1;
+    console.log('[Renderer] Loaded', result.cues.length, 'cues from', result.format);
+    updateCaptionOverlay();
+    updateSyncBar();
+  }
+
+  async function loadEmbeddedCaptions() {
+    const source = originalFilePath || currentFilePath;
+    if (!source) return;
+
+    const result = await window.electronAPI.extractEmbeddedCaptions(source);
+    if (result.error) {
+      alert(result.error);
+      return;
+    }
+    captionTrack = result;
+    captionsVisible = true;
+    activeCueIndex = -1;
+    updateCaptionOverlay();
+    updateSyncBar();
+  }
+
+  // ── Secondary audio (§5) ──
+
+  function detachSecondaryAudio() {
+    if (!secondaryAudio) return;
+    secondaryAudio.pause();
+    secondaryAudio.src = '';
+    secondaryAudio = null;
+  }
+
+  /**
+   * Keep the secondary track locked to the primary clock. Small drift is
+   * corrected by nudging currentTime; anything past the threshold is a hard
+   * reseek (which is what a user scrub looks like).
+   */
+  const SECONDARY_DRIFT_TOLERANCE = 0.08;   // seconds
+
+  function resyncSecondaryAudio(force) {
+    if (!secondaryAudio) return;
+    const target = video.currentTime - syncOffsetSeconds();
+    if (target < 0) { secondaryAudio.pause(); return; }
+
+    if (force || Math.abs(secondaryAudio.currentTime - target) > SECONDARY_DRIFT_TOLERANCE) {
+      secondaryAudio.currentTime = target;
+    }
+    secondaryAudio.playbackRate = video.playbackRate;
+
+    const shouldPlay = !video.paused && !video.ended && shuttleDirection !== -1;
+    if (shouldPlay && secondaryAudio.paused) secondaryAudio.play().catch(() => {});
+    if (!shouldPlay && !secondaryAudio.paused) secondaryAudio.pause();
+  }
+
+  async function loadSecondaryAudio() {
+    const filePath = await window.electronAPI.openSecondaryAudioDialog();
+    if (!filePath) return;
+
+    detachSecondaryAudio();
+    const audio = new Audio();
+    audio.src = 'file://' + filePath.replace(/\\/g, '/');
+    audio.dataset.name = filePath.split(/[\\/]/).pop();
+    audio.preload = 'auto';
+
+    audio.addEventListener('error', () => {
+      alert('Could not load secondary audio — the format may need transcoding first.');
+      detachSecondaryAudio();
+      updateSyncBar();
+    });
+
+    secondaryAudio = audio;
+    resyncSecondaryAudio(true);
+    updateSyncBar();
+  }
+
+  window.electronAPI.onLoadCaptionFile(() => loadCaptionSidecar());
+  window.electronAPI.onExtractEmbeddedCaptions(() => loadEmbeddedCaptions());
+  window.electronAPI.onLoadSecondaryAudio(() => loadSecondaryAudio());
+
+  // ─── Audio Meters & Loudness (§6) ─────────────────────
+  //
+  // Two separate things share this panel:
+  //   • Live per-channel meters, driven by Web Audio off the playing element.
+  //     These are indicative — rAF sampling means they see most, not all, of
+  //     the signal.
+  //   • Offline program loudness, measured by ffmpeg's ebur128 over the whole
+  //     file. That is the spec-grade number a QC operator signs off on.
+
+  const audioPanel = document.getElementById('audio-panel');
+  const meterRack = document.getElementById('meter-rack');
+  const loudnessResults = document.getElementById('loudness-results');
+  const loudnessProgress = document.getElementById('loudness-progress');
+  const loudnessProgressBar = document.getElementById('loudness-progress-bar');
+  const btnAnalyzeLoudness = document.getElementById('btn-analyze-loudness');
+  const btnCloseAudio = document.getElementById('btn-close-audio');
+  const loudnessTargetSel = document.getElementById('loudness-target');
+  const loudnessGatingSel = document.getElementById('loudness-gating');
+
+  let audioCtx = null;
+  let meterSourceNode = null;  // MediaElementAudioSourceNode (not the MSE MediaSource)
+  let channelStrips = [];   // { index, label, analyser, gain, muted, soloed, els }
+  let meterRAF = null;
+
+  /**
+   * Build the metering graph:
+   *   <video> → splitter → [per-channel gain → analyser] → merger → destination
+   * Created once — a MediaElementAudioSourceNode can only be made once per
+   * element, and re-creating it would silence playback.
+   */
+  function ensureAudioGraph() {
+    if (audioCtx) return true;
+    try {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      meterSourceNode = audioCtx.createMediaElementSource(video);
+      return true;
+    } catch (err) {
+      console.warn('[Renderer] Could not create audio graph:', err.message);
+      audioCtx = null;
+      return false;
+    }
+  }
+
+  function buildMeters(channelCount, labels) {
+    if (!ensureAudioGraph()) return;
+
+    // Tear down any previous routing before re-wiring for a new channel count.
+    try { meterSourceNode.disconnect(); } catch (_) { /* not connected yet */ }
+    channelStrips.forEach((s) => {
+      try { s.gain.disconnect(); s.analyser.disconnect(); } catch (_) { /* ignore */ }
+    });
+    channelStrips = [];
+    meterRack.innerHTML = '';
+
+    const count = Math.max(1, Math.min(channelCount || 2, 32));
+    const splitter = audioCtx.createChannelSplitter(count);
+    const merger = audioCtx.createChannelMerger(count);
+    meterSourceNode.connect(splitter);
+
+    for (let i = 0; i < count; i++) {
+      const gain = audioCtx.createGain();
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 2048;
+
+      splitter.connect(gain, i);
+      gain.connect(analyser);
+      gain.connect(merger, 0, i);
+
+      const strip = document.createElement('div');
+      strip.className = 'meter-strip';
+      const bar = document.createElement('div');
+      bar.className = 'meter-bar';
+      const fill = document.createElement('div');
+      fill.className = 'meter-fill';
+      const peakLine = document.createElement('div');
+      peakLine.className = 'meter-peak';
+      bar.appendChild(fill);
+      bar.appendChild(peakLine);
+
+      const label = document.createElement('span');
+      label.className = 'meter-label';
+      label.textContent = (labels && labels[i]) || 'Ch ' + (i + 1);
+
+      const value = document.createElement('span');
+      value.className = 'meter-value';
+      value.textContent = '−∞';
+
+      const btns = document.createElement('div');
+      btns.className = 'meter-btns';
+      const btnMute = document.createElement('button');
+      btnMute.textContent = 'M';
+      btnMute.title = 'Mute this channel';
+      const btnSolo = document.createElement('button');
+      btnSolo.textContent = 'S';
+      btnSolo.title = 'Solo this channel';
+      btns.appendChild(btnMute);
+      btns.appendChild(btnSolo);
+
+      strip.appendChild(bar);
+      strip.appendChild(label);
+      strip.appendChild(value);
+      strip.appendChild(btns);
+      meterRack.appendChild(strip);
+
+      const stripState = {
+        index: i, gain, analyser, muted: false, soloed: false,
+        els: { fill, peakLine, value, btnMute, btnSolo },
+        peakHold: 0, peakHoldAt: 0,
+      };
+      btnMute.addEventListener('click', () => {
+        stripState.muted = !stripState.muted;
+        btnMute.classList.toggle('active', stripState.muted);
+        applyChannelRouting();
+      });
+      btnSolo.addEventListener('click', () => {
+        stripState.soloed = !stripState.soloed;
+        btnSolo.classList.toggle('active', stripState.soloed);
+        applyChannelRouting();
+      });
+      channelStrips.push(stripState);
+    }
+
+    merger.connect(audioCtx.destination);
+    applyChannelRouting();
+    startMeterLoop();
+  }
+
+  // Solo wins over mute: if anything is soloed, only soloed channels are heard.
+  function applyChannelRouting() {
+    const anySoloed = channelStrips.some((s) => s.soloed);
+    for (const s of channelStrips) {
+      const audible = anySoloed ? s.soloed : !s.muted;
+      s.gain.gain.value = audible ? 1 : 0;
+    }
+  }
+
+  function amplitudeToDb(amp) {
+    return amp > 0 ? 20 * Math.log10(amp) : -Infinity;
+  }
+
+  // -60 dBFS at the bottom of the bar, 0 dBFS at the top.
+  function dbToMeterFraction(db) {
+    if (!isFinite(db)) return 0;
+    return Math.max(0, Math.min(1, (db + 60) / 60));
+  }
+
+  function startMeterLoop() {
+    if (meterRAF) return;
+    const buf = new Float32Array(2048);
+
+    const tick = () => {
+      if (!audioPanel.classList.contains('hidden') && channelStrips.length) {
+        for (const s of channelStrips) {
+          s.analyser.getFloatTimeDomainData(buf);
+          let peak = 0;
+          let sumSquares = 0;
+          for (let i = 0; i < buf.length; i++) {
+            const v = Math.abs(buf[i]);
+            if (v > peak) peak = v;
+            sumSquares += buf[i] * buf[i];
+          }
+          const rms = Math.sqrt(sumSquares / buf.length);
+          const peakDb = amplitudeToDb(peak);
+          const rmsDb = amplitudeToDb(rms);
+
+          s.els.fill.style.height = (dbToMeterFraction(rmsDb) * 100) + '%';
+          s.els.fill.classList.toggle('over', peakDb > -0.1);
+
+          // Peak hold decays after 1.5s rather than sticking forever.
+          const now = performance.now();
+          if (peakDb > s.peakHold || now - s.peakHoldAt > 1500) {
+            s.peakHold = peakDb;
+            s.peakHoldAt = now;
+          }
+          s.els.peakLine.style.bottom = (dbToMeterFraction(s.peakHold) * 100) + '%';
+          s.els.value.textContent = isFinite(s.peakHold) ? s.peakHold.toFixed(1) : '−∞';
+        }
+      }
+      meterRAF = requestAnimationFrame(tick);
+    };
+    meterRAF = requestAnimationFrame(tick);
+  }
+
+  function toggleAudioPanel() {
+    const wasHidden = audioPanel.classList.contains('hidden');
+    fileInfoPanel.classList.add('hidden');
+    shortcutsPanel.classList.add('hidden');
+    audioPanel.classList.toggle('hidden', !wasHidden);
+
+    if (wasHidden) {
+      // A user gesture is required before an AudioContext may start.
+      if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+      const track = currentInspection && currentInspection.audio && currentInspection.audio[0];
+      buildMeters(track ? track.channels : 2, track ? track.speakerLabels : null);
+    }
+  }
+
+  btnCloseAudio.addEventListener('click', () => audioPanel.classList.add('hidden'));
+
+  btnAnalyzeLoudness.addEventListener('click', async () => {
+    const source = originalFilePath || currentFilePath;
+    if (!source) return;
+
+    btnAnalyzeLoudness.disabled = true;
+    btnAnalyzeLoudness.textContent = 'Analyzing…';
+    loudnessProgress.classList.remove('hidden');
+    loudnessProgressBar.style.width = '0%';
+    loudnessResults.innerHTML = '';
+
+    try {
+      const measurement = await window.electronAPI.measureLoudness(source, {
+        gated: loudnessGatingSel.value === 'gated',
+        duration: (currentInspection && currentInspection.container.duration) || video.duration || 0,
+      });
+
+      if (measurement.error) {
+        addInfoRow(loudnessResults, 'Error', measurement.error);
+        return;
+      }
+
+      const verdict = await window.electronAPI.checkLoudnessTarget(
+        measurement, loudnessTargetSel.value);
+
+      addInfoRow(loudnessResults, 'Integrated',
+        measurement.integrated + ' ' + (loudnessTargetSel.value === 'atsc-a85' ? 'LKFS' : 'LUFS'));
+      addInfoRow(loudnessResults, 'Loudness Range (LRA)',
+        measurement.loudnessRange !== null ? measurement.loudnessRange + ' LU' : null);
+      addInfoRow(loudnessResults, 'Max True Peak',
+        measurement.truePeak !== null ? measurement.truePeak + ' dBTP' : null);
+      addInfoRow(loudnessResults, 'Gating',
+        measurement.gated ? 'Gated (BS.1770-3/-4)' : 'Ungated (BS.1770-2)');
+
+      if (verdict && !verdict.error) {
+        for (const check of verdict.checks) {
+          const row = document.createElement('span');
+          row.className = 'info-label';
+          row.textContent = check.name;
+          const val = document.createElement('span');
+          val.className = 'info-value loudness-' + (check.pass ? 'pass' : 'fail');
+          val.textContent = (check.pass ? '✓ PASS' : '✗ FAIL') + ' — ' + check.detail;
+          loudnessResults.appendChild(row);
+          loudnessResults.appendChild(val);
+        }
+        const overall = document.createElement('span');
+        overall.className = 'info-label';
+        overall.textContent = verdict.target;
+        const overallVal = document.createElement('span');
+        overallVal.className = 'info-value loudness-' + (verdict.pass ? 'pass' : 'fail');
+        overallVal.textContent = verdict.pass ? '✓ MEETS SPEC' : '✗ OUT OF SPEC';
+        loudnessResults.appendChild(overall);
+        loudnessResults.appendChild(overallVal);
+      }
+    } catch (err) {
+      addInfoRow(loudnessResults, 'Error', err.message);
+    } finally {
+      btnAnalyzeLoudness.disabled = false;
+      btnAnalyzeLoudness.textContent = 'Analyze';
+      loudnessProgress.classList.add('hidden');
+    }
+  });
+
+  window.electronAPI.onLoudnessProgress((pct) => {
+    loudnessProgressBar.style.width = Math.round(pct * 100) + '%';
+  });
+
+  // ─── GOP / Data-Rate Strip ────────────────────────────
+  //
+  // Reading per-frame picture types means walking the bitstream, so the strip
+  // only ever covers a bounded window around the playhead and refetches when
+  // the playhead leaves it.
+
+  const GOP_WINDOW_SECONDS = 10;
+  const gopContainer = document.getElementById('gop-strip-container');
+  const gopCanvas = document.getElementById('gop-strip');
+  const gopStatus = document.getElementById('gop-status');
+  const gopCtx = gopCanvas.getContext('2d');
+
+  const GOP_COLORS = { I: '#ff9f43', P: '#54a0ff', B: '#8e8e93' };
+
+  let gopVisible = false;
+  let gopFrames = [];
+  let gopWindowStart = 0;
+  let gopWindowEnd = 0;
+  let gopLoading = false;
+
+  function toggleGopStrip() {
+    gopVisible = !gopVisible;
+    gopContainer.classList.toggle('hidden', !gopVisible);
+    if (gopVisible) {
+      gopFrames = [];
+      gopWindowStart = gopWindowEnd = 0;
+      refreshGopStrip();
+    }
+  }
+
+  async function refreshGopStrip(force) {
+    if (!gopVisible || !hasVideoLoaded || gopLoading) return;
+    const probeSource = originalFilePath || currentFilePath;
+    if (!probeSource) return;
+
+    const t = video.currentTime;
+    // Refetch once the playhead is inside the last 20% of the loaded window.
+    const margin = GOP_WINDOW_SECONDS * 0.2;
+    if (!force && gopFrames.length && t >= gopWindowStart && t <= gopWindowEnd - margin) {
+      drawGopStrip();
+      return;
+    }
+
+    const start = Math.max(0, t - GOP_WINDOW_SECONDS / 4);
+    gopLoading = true;
+    gopStatus.textContent = 'Analyzing…';
+    try {
+      const frames = await window.electronAPI.probeFrames(probeSource, start, GOP_WINDOW_SECONDS);
+      if (frames && frames.error) {
+        gopStatus.textContent = 'Frame analysis failed';
+        gopFrames = [];
+      } else {
+        gopFrames = (frames || []).filter((f) => f.time !== null);
+        gopWindowStart = start;
+        gopWindowEnd = start + GOP_WINDOW_SECONDS;
+      }
+    } catch (err) {
+      console.warn('[Renderer] GOP probe failed:', err.message);
+      gopStatus.textContent = 'Frame analysis failed';
+      gopFrames = [];
+    } finally {
+      gopLoading = false;
+    }
+    drawGopStrip();
+  }
+
+  function drawGopStrip() {
+    // Canvas is laid out by CSS; match the backing store to it (and to DPR) or
+    // the strip renders blurry and the click-to-seek mapping goes off.
+    const dpr = window.devicePixelRatio || 1;
+    const cssWidth = gopCanvas.clientWidth || 800;
+    const cssHeight = 46;
+    if (gopCanvas.width !== Math.round(cssWidth * dpr)) {
+      gopCanvas.width = Math.round(cssWidth * dpr);
+      gopCanvas.height = Math.round(cssHeight * dpr);
+    }
+    gopCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    gopCtx.clearRect(0, 0, cssWidth, cssHeight);
+
+    if (!gopFrames.length) {
+      gopStatus.textContent = gopLoading ? 'Analyzing…' : 'No frame data';
+      return;
+    }
+
+    const span = gopWindowEnd - gopWindowStart;
+    const tickHeight = 14;
+    const curveTop = tickHeight + 2;
+    const curveHeight = cssHeight - curveTop;
+    const maxSize = Math.max(...gopFrames.map((f) => f.size || 0), 1);
+
+    // Picture-type ticks
+    for (const f of gopFrames) {
+      const x = ((f.time - gopWindowStart) / span) * cssWidth;
+      const w = Math.max(1.5, cssWidth / (gopFrames.length * 1.4));
+      gopCtx.fillStyle = GOP_COLORS[f.pictType] || '#555';
+      gopCtx.fillRect(x, 0, w, tickHeight);
+    }
+
+    // Per-frame data-rate curve
+    gopCtx.beginPath();
+    gopFrames.forEach((f, i) => {
+      const x = ((f.time - gopWindowStart) / span) * cssWidth;
+      const y = curveTop + curveHeight - ((f.size || 0) / maxSize) * curveHeight;
+      if (i === 0) gopCtx.moveTo(x, y); else gopCtx.lineTo(x, y);
+    });
+    gopCtx.strokeStyle = 'rgba(255,255,255,0.55)';
+    gopCtx.lineWidth = 1;
+    gopCtx.stroke();
+
+    // Playhead
+    const px = ((video.currentTime - gopWindowStart) / span) * cssWidth;
+    if (px >= 0 && px <= cssWidth) {
+      gopCtx.fillStyle = '#fff';
+      gopCtx.fillRect(px - 0.5, 0, 1, cssHeight);
+    }
+
+    const counts = gopFrames.reduce((acc, f) => {
+      acc[f.pictType] = (acc[f.pictType] || 0) + 1;
+      return acc;
+    }, {});
+    const avgKb = Math.round(
+      gopFrames.reduce((s, f) => s + (f.size || 0), 0) / gopFrames.length / 1024);
+    gopStatus.textContent =
+      gopFrames.length + ' frames · I ' + (counts.I || 0) +
+      ' / P ' + (counts.P || 0) + ' / B ' + (counts.B || 0) +
+      ' · peak ' + Math.round(maxSize / 1024) + ' kB · avg ' + avgKb + ' kB';
+  }
+
+  // Click a tick to seek to that exact frame.
+  gopCanvas.addEventListener('click', (e) => {
+    if (!gopFrames.length) return;
+    const rect = gopCanvas.getBoundingClientRect();
+    const ratio = (e.clientX - rect.left) / rect.width;
+    const targetTime = gopWindowStart + ratio * (gopWindowEnd - gopWindowStart);
+    // Snap to the nearest analyzed frame so the seek lands on a real frame.
+    let nearest = gopFrames[0];
+    for (const f of gopFrames) {
+      if (Math.abs(f.time - targetTime) < Math.abs(nearest.time - targetTime)) nearest = f;
+    }
+    stopShuttle();
+    seekTo(nearest.time);
+    drawGopStrip();
+  });
+
+  window.addEventListener('resize', () => { if (gopVisible) drawGopStrip(); });
 
   // ─── Fullscreen Polling ───────────────────────────────
 
@@ -1520,6 +2404,6 @@
   // ─── Initial State ────────────────────────────────────
   updateVolumeIcon();
   updatePlayButton();
-  console.log('[Renderer] PokitPlayer v1.1.3 initialized');
+  console.log('[Renderer] PokitPlayer v1.2.0 initialized');
 
 })();

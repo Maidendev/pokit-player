@@ -1,6 +1,6 @@
 {
   "name": "pokitplayer",
-  "version": "1.1.9",
+  "version": "1.2.0",
   "description": "PokitPlayer — A professional cross-platform video player with instant streaming playback for ProRes/DNxHD/DNxHR, QuickTime shortcuts, timecode display, and file info viewer.",
   "main": "src/main.js",
   "repository": {
@@ -38,6 +38,7 @@
     ],
     "asarUnpack": [
       "node_modules/ffmpeg-static/**",
+      "node_modules/ffprobe-static/**",
       "src/bin/**"
     ],
     "publish": [
@@ -72,7 +73,10 @@
       "requestedExecutionLevel": "asInvoker",
       "extraFiles": [],
       "files": [
-        "!src/bin/ffmpeg-darwin"
+        "!src/bin/ffmpeg-darwin",
+        "!node_modules/ffprobe-static/bin/darwin/**",
+        "!node_modules/ffprobe-static/bin/linux/**",
+        "!node_modules/ffprobe-static/bin/win32/ia32/**"
       ]
     },
     "nsis": {
@@ -120,7 +124,9 @@
       "type": "distribution",
       "notarize": false,
       "files": [
-        "!src/bin/ffmpeg.exe"
+        "!src/bin/ffmpeg.exe",
+        "!node_modules/ffprobe-static/bin/win32/**",
+        "!node_modules/ffprobe-static/bin/linux/**"
       ]
     },
     "afterSign": "scripts/notarize.js",
@@ -150,6 +156,11 @@
         "deb"
       ],
       "icon": "src/assets/icon.png",
+      "files": [
+        "!node_modules/ffprobe-static/bin/win32/**",
+        "!node_modules/ffprobe-static/bin/darwin/**",
+        "!node_modules/ffprobe-static/bin/linux/ia32/**"
+      ],
       "category": "Video",
       "desktop": {
         "MimeType": "video/mp4;video/webm;video/x-matroska;video/avi;video/quicktime;video/x-m4v;video/x-flv;video/x-ms-wmv;video/mpeg;application/mxf;image/x-dpx;image/x-exr;image/tiff"
@@ -304,6 +315,7 @@
   "dependencies": {
     "electron-updater": "^6.8.9",
     "ffmpeg-static": "^5.3.0",
+    "ffprobe-static": "^3.1.0",
     "fluent-ffmpeg": "^2.1.3"
   }
 }

@@ -2,6 +2,9 @@ const { app, BrowserWindow, ipcMain, dialog, Menu, shell } = require('electron')
 const path = require('path');
 const fs = require('fs');
 const transcoder = require('./transcoder');
+const inspector = require('./inspector');
+const loudness = require('./loudness');
+const captions = require('./captions');
 const { StreamDecoder } = require('./stream-decoder');
 const { autoUpdater } = require('electron-updater');
 
@@ -12,6 +15,11 @@ let streamDecoder = null; // Singleton stream decoder instance
 const VIDEO_EXTENSIONS = [
   '.mp4', '.webm', '.mkv', '.avi', '.mov', '.m4v', '.ogv', '.ogg',
   '.flv', '.wmv', '.mpg', '.mpeg', '.mxf',
+  // Professional containers: MPEG-2 transport/program streams, GXF, ASF,
+  // Motion JPEG 2000. Everything here demuxes in the bundled FFmpeg and is
+  // routed through the stream decoder rather than the <video> element.
+  '.ts', '.m2ts', '.mts', '.m2v', '.mpv', '.vob', '.gxf', '.asf', '.mj2',
+  '.3gp', '.3g2',
 ];
 const IMAGE_SEQ_EXTENSIONS = transcoder.IMAGE_SEQ_EXTENSIONS; // .dpx .exr .tif .tiff .png .jpg .jpeg
 const ALL_EXTENSIONS = [...VIDEO_EXTENSIONS, ...IMAGE_SEQ_EXTENSIONS];
@@ -76,6 +84,15 @@ function getFileFromArgs(argv) {
 }
 
 function buildMenu() {
+  // Playback keys (Space, J/K/L, arrows, F, M) are owned by the renderer's
+  // keydown handler so the J/K/L shuttle keeps a single source of truth.
+  // Registering the same keys as menu accelerators fires both handlers, which
+  // cancel each other out — Space would play and immediately pause again.
+  // macOS can show the accelerator in the menu without registering it; on
+  // Windows/Linux registerAccelerator is ignored, so the key is omitted there.
+  const hint = (accel) =>
+    (process.platform === 'darwin' ? { accelerator: accel, registerAccelerator: false } : {});
+
   const template = [
     {
       label: 'File',
@@ -89,6 +106,27 @@ function buildMenu() {
           label: 'Open Image Sequence…',
           accelerator: 'CmdOrCtrl+Shift+O',
           click: () => openImageSequenceDialog(),
+        },
+        { type: 'separator' },
+        {
+          label: 'Load Caption / Subtitle File…',
+          accelerator: 'CmdOrCtrl+Shift+C',
+          click: () => {
+            if (mainWindow) mainWindow.webContents.send('load-caption-file');
+          },
+        },
+        {
+          label: 'Extract Embedded Captions (CEA-608)',
+          click: () => {
+            if (mainWindow) mainWindow.webContents.send('extract-embedded-captions');
+          },
+        },
+        {
+          label: 'Load Secondary Audio…',
+          accelerator: 'CmdOrCtrl+Shift+A',
+          click: () => {
+            if (mainWindow) mainWindow.webContents.send('load-secondary-audio');
+          },
         },
         { type: 'separator' },
         {
@@ -107,22 +145,36 @@ function buildMenu() {
       submenu: [
         {
           label: 'Play / Pause',
-          accelerator: 'Space',
+          ...hint('Space'),
           click: () => {
             if (mainWindow) mainWindow.webContents.send('playback-toggle');
+          },
+        },
+        {
+          label: 'Shuttle Forward',
+          ...hint('L'),
+          click: () => {
+            if (mainWindow) mainWindow.webContents.send('shuttle', 1);
+          },
+        },
+        {
+          label: 'Shuttle Backward',
+          ...hint('J'),
+          click: () => {
+            if (mainWindow) mainWindow.webContents.send('shuttle', -1);
           },
         },
         { type: 'separator' },
         {
           label: 'Skip Forward 5s',
-          accelerator: 'Right',
+          ...hint('Right'),
           click: () => {
             if (mainWindow) mainWindow.webContents.send('seek-relative', 5);
           },
         },
         {
           label: 'Skip Backward 5s',
-          accelerator: 'Left',
+          ...hint('Left'),
           click: () => {
             if (mainWindow) mainWindow.webContents.send('seek-relative', -5);
           },
@@ -130,14 +182,14 @@ function buildMenu() {
         { type: 'separator' },
         {
           label: 'Next Frame',
-          accelerator: 'CmdOrCtrl+Right',
+          ...hint('CmdOrCtrl+Right'),
           click: () => {
             if (mainWindow) mainWindow.webContents.send('frame-step', 1);
           },
         },
         {
           label: 'Previous Frame',
-          accelerator: 'CmdOrCtrl+Left',
+          ...hint('CmdOrCtrl+Left'),
           click: () => {
             if (mainWindow) mainWindow.webContents.send('frame-step', -1);
           },
@@ -145,21 +197,21 @@ function buildMenu() {
         { type: 'separator' },
         {
           label: 'Volume Up',
-          accelerator: 'Up',
+          ...hint('Up'),
           click: () => {
             if (mainWindow) mainWindow.webContents.send('volume-change', 0.05);
           },
         },
         {
           label: 'Volume Down',
-          accelerator: 'Down',
+          ...hint('Down'),
           click: () => {
             if (mainWindow) mainWindow.webContents.send('volume-change', -0.05);
           },
         },
         {
           label: 'Mute / Unmute',
-          accelerator: 'M',
+          ...hint('M'),
           click: () => {
             if (mainWindow) mainWindow.webContents.send('toggle-mute');
           },
@@ -167,7 +219,7 @@ function buildMenu() {
         { type: 'separator' },
         {
           label: 'Toggle Fullscreen',
-          accelerator: 'F',
+          ...hint('F'),
           click: () => {
             if (mainWindow) {
               mainWindow.setFullScreen(!mainWindow.isFullScreen());
@@ -198,6 +250,21 @@ function buildMenu() {
           accelerator: 'CmdOrCtrl+3',
           click: () => {
             if (mainWindow) mainWindow.webContents.send('set-window-size', 1.0);
+          },
+        },
+        { type: 'separator' },
+        {
+          label: 'GOP / Data Rate Strip',
+          accelerator: 'CmdOrCtrl+G',
+          click: () => {
+            if (mainWindow) mainWindow.webContents.send('toggle-gop-strip');
+          },
+        },
+        {
+          label: 'Audio Meters & Loudness',
+          accelerator: 'CmdOrCtrl+L',
+          click: () => {
+            if (mainWindow) mainWindow.webContents.send('toggle-audio-panel');
           },
         },
         { type: 'separator' },
@@ -280,6 +347,8 @@ async function openFileDialog() {
         extensions: [
           'mp4', 'webm', 'mkv', 'avi', 'mov', 'm4v', 'ogv', 'ogg',
           'flv', 'wmv', 'mpg', 'mpeg', 'mxf',
+          'ts', 'm2ts', 'mts', 'm2v', 'mpv', 'vob', 'gxf', 'asf', 'mj2',
+          '3gp', '3g2',
         ],
       },
       {
@@ -351,6 +420,106 @@ ipcMain.handle('probe-file', async (_event, filePath) => {
     return result;
   } catch (err) {
     console.error('[Main] Probe error:', err.message);
+    return { error: err.message };
+  }
+});
+
+// Deep inspection for the "Check It" panel (ffprobe JSON, not the playback probe)
+ipcMain.handle('inspect-file', async (_event, filePath) => {
+  console.log('[Main] IPC: inspect-file', filePath);
+  try {
+    return await inspector.inspectFile(filePath);
+  } catch (err) {
+    console.error('[Main] Inspect error:', err.message);
+    return { error: err.message };
+  }
+});
+
+// Per-frame picture types + sizes for the GOP / data-rate strip
+ipcMain.handle('probe-frames', async (_event, filePath, startTime, duration) => {
+  try {
+    return await inspector.probeFrames(filePath, startTime, duration);
+  } catch (err) {
+    console.error('[Main] Frame probe error:', err.message);
+    return { error: err.message };
+  }
+});
+
+// Whether deep inspection is usable at all, so the UI can degrade gracefully
+ipcMain.handle('inspector-available', async () => inspector.isAvailable());
+
+// Offline program-loudness measurement (BS.1770 via ebur128)
+ipcMain.handle('measure-loudness', async (event, filePath, options) => {
+  console.log('[Main] IPC: measure-loudness', filePath, options);
+  try {
+    const measurement = await loudness.measureLoudness(filePath, Object.assign({}, options, {
+      onProgress: (pct) => {
+        if (!event.sender.isDestroyed()) event.sender.send('loudness-progress', pct);
+      },
+    }));
+    return measurement;
+  } catch (err) {
+    console.error('[Main] Loudness error:', err.message);
+    return { error: err.message };
+  }
+});
+
+// Load a sidecar caption/subtitle file (§3)
+ipcMain.handle('load-caption-file', async (_event, filePath, fps) => {
+  console.log('[Main] IPC: load-caption-file', filePath);
+  try {
+    return captions.loadSidecar(filePath, fps);
+  } catch (err) {
+    console.error('[Main] Caption load error:', err.message);
+    return { error: err.message };
+  }
+});
+
+// Extract embedded CEA-608 captions from the media file itself (§3)
+ipcMain.handle('extract-embedded-captions', async (_event, filePath) => {
+  console.log('[Main] IPC: extract-embedded-captions', filePath);
+  try {
+    const outputPath = transcoder.makeTempPath('.srt');
+    return await captions.extractEmbedded608(filePath, outputPath);
+  } catch (err) {
+    console.error('[Main] Embedded caption error:', err.message);
+    return { error: err.message };
+  }
+});
+
+// Pick a sidecar caption file
+ipcMain.handle('open-caption-dialog', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Load Caption / Subtitle File',
+    properties: ['openFile'],
+    filters: [
+      {
+        name: 'Caption & Subtitle Files',
+        extensions: ['srt', 'vtt', 'webvtt', 'scc', 'ttml', 'itt', 'dfxp', 'xml', 'stl'],
+      },
+      { name: 'All Files', extensions: ['*'] },
+    ],
+  });
+  return result.canceled ? null : result.filePaths[0];
+});
+
+// Pick a secondary audio file for sync checking (§5)
+ipcMain.handle('open-secondary-audio-dialog', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Load Secondary Audio File',
+    properties: ['openFile'],
+    filters: [
+      { name: 'Audio Files', extensions: ['wav', 'aiff', 'aif', 'mp3', 'aac', 'm4a', 'flac', 'mxf'] },
+      { name: 'All Files', extensions: ['*'] },
+    ],
+  });
+  return result.canceled ? null : result.filePaths[0];
+});
+
+ipcMain.handle('check-loudness-target', async (_event, measurement, targetKey) => {
+  try {
+    return loudness.checkAgainstTarget(measurement, targetKey);
+  } catch (err) {
     return { error: err.message };
   }
 });

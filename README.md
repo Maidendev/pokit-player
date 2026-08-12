@@ -27,17 +27,53 @@ A professional, cross-platform desktop video player built with Electron. Feature
 - **Half Size (50%)** — Resize window to 50% of video resolution (`⌘2` / `Ctrl+2`)
 - **Full Size (100%)** — Resize window to 100% of video resolution (`⌘3` / `Ctrl+3`)
 
-#### File Information Viewer
-- Video resolution, aspect ratio, and frame rate
-- File size, format, and modification date
-- Audio track detection
+#### Media Inspector ("Check It")
+Deep inspection via ffprobe, in a summary view with an expandable **Advanced** section:
+- **Video** — resolution, display & pixel aspect ratio, clean aperture, frame rate, scan type
+  and field order, bit depth, chroma subsampling, codec profile/level, GOP structure
+- **Color & HDR** — primaries, transfer, matrix, range; HDR10 / HLG / PQ detection with
+  mastering-display primaries, luminance, MaxCLL and MaxFALL
+- **Audio** — codec, channel count with speaker labels (L/R/C/LFE/Ls/Rs), sample rate,
+  bit depth, per-track bitrate
+- **Container** — format, duration, start timecode, reel name, MPEG-TS program/PID
+  structure, timecode tracks, chapters and container metadata
+- Properties the file doesn't carry are marked "—" rather than hidden
+
+#### Professional Format Playback
+- **Containers** — MXF (OP1a), GXF, MPEG-2 Transport & Program Streams, MOV, MP4,
+  WMV/ASF, MKV, WebM, AVI, MJ2
+- **Codecs** — H.264, HEVC (incl. 4K), MPEG-2, Apple ProRes (Proxy/LT/422/HQ/4444/4444 XQ),
+  DNxHD & DNxHR, JPEG 2000, VC-1, Windows Media
+- Non-native codecs route through the streaming decoder rather than the `<video>` element
+
+#### Captions & Subtitles
+- **Sidecar formats** — SRT, WebVTT, SCC (CEA-608), TTML / IMSC1, iTT, DFXP, EBU STL
+- **Embedded** — extract CEA-608 captions carried in MXF, MPEG-TS and MOV
+- Overlay renders over picture in transcoded and streamed playback alike
+- Malformed caption files report a specific parse error instead of failing silently
+
+#### Audio Meters & Loudness (`⌘L` / `Ctrl+L`)
+- Per-channel meters with speaker labels, peak hold, and solo/mute per channel
+- Program loudness to **ITU-R BS.1770** via `ebur128`: integrated, LRA, max true peak
+- Gated (BS.1770-3/-4) and ungated (BS.1770-2) modes
+- Pass/fail against **EBU R128** (−23 LUFS) and **ATSC A/85 / CALM Act** (−24 LKFS)
+
+#### GOP / Data Rate Strip (`⌘G` / `Ctrl+G`)
+- I / P / B frames colour-coded per frame, with a per-frame data-rate curve
+- Click any frame to seek to it exactly
+- Intra-only codecs (ProRes, DNxHR, JPEG 2000) show as all-I
+
+#### Secondary File Sync Check
+- Load a secondary audio file or caption file against the primary picture
+- Frame-accurate offset nudge (± frames, shown in ms) applied live
 
 #### QuickTime Keyboard Shortcuts
 
 | Shortcut | Action |
 |---|---|
-| `Space` | Play / Pause |
-| `J` / `K` / `L` | Shuttle backward / stop / forward (Premiere/FCP-style — tap J or L again to ramp speed 2x–8x) |
+| `Space` / `K` | Play / Pause |
+| `J` / `L` | Shuttle backward / forward (Premiere/FCP-style — tap again to ramp 2x–8x, tap the other key to step back down) |
+| `K`+`J` / `K`+`L` | Slow shuttle (half speed) |
 | `←` / `→` | Skip 5 seconds backward / forward |
 | `⌘←` / `⌘→` (or `Ctrl`) | Frame-by-frame backward / forward |
 | `↑` / `↓` | Volume up / down |

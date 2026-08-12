@@ -43,6 +43,25 @@ jobs:
 
       - run: npm install
 
+      # Say plainly in the log whether this build will be signed. Without this
+      # an unsigned build looks identical to a signed one until a user hits
+      # the Gatekeeper warning.
+      - name: Report signing configuration
+        if: matrix.os == 'macos-latest'
+        shell: bash
+        run: |
+          if [[ -n "${{ secrets.MAC_CSC_LINK }}" ]]; then
+            echo "macOS code signing: ENABLED (MAC_CSC_LINK present)"
+          else
+            echo "macOS code signing: DISABLED — no MAC_CSC_LINK secret."
+            echo "Build will be unsigned; users will see a Gatekeeper warning."
+          fi
+          if [[ -n "${{ secrets.APPLE_ID }}" && -n "${{ secrets.APPLE_TEAM_ID }}" ]]; then
+            echo "Notarization: ENABLED"
+          else
+            echo "Notarization: DISABLED — APPLE_ID / APPLE_TEAM_ID not set."
+          fi
+
       # On a version tag, publish straight to a GitHub Release — that Release
       # is the update feed electron-updater polls on installed desktops.
       # On any other trigger (push to main, PR), build only, never publish.
@@ -55,7 +74,20 @@ jobs:
             npx electron-builder ${{ matrix.platformFlag }} --publish never
           fi
         env:
-          CSC_IDENTITY_AUTO_DISCOVERY: false
+          # Windows has no certificate configured, so keep auto-discovery off
+          # there. On macOS, signing is driven by CSC_LINK / CSC_KEY_PASSWORD;
+          # when those secrets are absent electron-builder logs that it cannot
+          # find a certificate and produces an unsigned build rather than
+          # failing, so this stays safe before the secrets are added.
+          CSC_IDENTITY_AUTO_DISCOVERY: ${{ matrix.os == 'macos-latest' && 'true' || 'false' }}
+          # Base64-encoded .p12 and its password.
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          # Consumed by scripts/notarize.js in the afterSign hook. Notarization
+          # requires a signed app — without CSC_LINK these do nothing.
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Works around a longstanding electron-builder bug where its
           # hardlink-based file copier loses an exists-check and throws
