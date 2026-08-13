@@ -428,11 +428,23 @@ function parseProbeOutput(output, filePath) {
   const nativeAudioCodecs = ['aac', 'mp3', 'mp4a', 'opus', 'vorbis', 'flac'];
   const nativeContainers = ['mp4', 'm4v', 'mov', 'webm', 'ogg', 'ogv', 'mkv'];
 
+  // Linear PCM is decoded natively in every width and endianness tested
+  // (s16le, s24le, s16be, f32le all play with audible audio in a MOV), and
+  // uncompressed audio in a MOV is extremely common in professional masters.
+  // Treating it as non-native sent those files through a full decode for no
+  // reason — an H.264/PCM master that Chromium could have played instantly
+  // instead had to be transcoded before it would start.
+  // Exotic variants such as pcm_bluray only appear in containers that are not
+  // on the native list anyway, so the container check still catches them.
+  const isNativePcm = (codec) => /^pcm_[suf]\d+(le|be)?$/.test(codec || '');
+
   // ProRes/DNxHD/MXF handling above may already have decided; re-derive from
   // scratch so one rule owns the outcome instead of later lines silently
   // overriding earlier ones.
   const videoOk = !info.codec || nativeVideoCodecs.includes(info.codec);
-  const audioOk = !info.audioCodec || nativeAudioCodecs.includes(info.audioCodec);
+  const audioOk = !info.audioCodec ||
+    nativeAudioCodecs.includes(info.audioCodec) ||
+    isNativePcm(info.audioCodec);
   const containerOk = !info.container || nativeContainers.includes(info.container);
 
   info.needsTranscode = !(videoOk && audioOk && containerOk);

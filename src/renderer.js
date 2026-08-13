@@ -2596,6 +2596,6 @@
   // ─── Initial State ────────────────────────────────────
   updateVolumeIcon();
   updatePlayButton();
-  console.log('[Renderer] PokitPlayer v1.2.6 initialized');
+  console.log('[Renderer] PokitPlayer v1.2.7 initialized');
 
 })();

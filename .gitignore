@@ -55,3 +55,6 @@ yarn-error.log*
 .env
 .env.local
 .env.production
+
+# Local test media — large binaries, not part of the app
+FOOTAGE/
