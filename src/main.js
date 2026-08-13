@@ -692,12 +692,47 @@ autoUpdater.on('update-downloaded', (info) => {
     });
 });
 
-function checkForUpdates(showNoUpdateDialog) {
-  // electron-updater errors out on unsigned/unpackaged (dev) runs — don't let
-  // an update check crash the app.
+// Set while a user-initiated check is in flight. The automatic check on launch
+// must stay silent, but a check the user asked for has to report an outcome —
+// otherwise "Check for Updates…" looks broken when you are already current,
+// which is the most common case.
+let manualUpdateCheck = false;
+
+autoUpdater.on('update-not-available', () => {
+  console.log('[Updater] already up to date:', app.getVersion());
+  if (!manualUpdateCheck || !mainWindow) return;
+  manualUpdateCheck = false;
+  dialog.showMessageBox(mainWindow, {
+    type: 'info',
+    title: 'No Updates Available',
+    message: `PokitPlayer ${app.getVersion()} is the latest version.`,
+    buttons: ['OK'],
+  });
+});
+
+autoUpdater.on('update-available', (info) => {
+  console.log('[Updater] update available:', info && info.version);
+  if (!manualUpdateCheck || !mainWindow) return;
+  manualUpdateCheck = false;
+  dialog.showMessageBox(mainWindow, {
+    type: 'info',
+    title: 'Update Available',
+    message: `PokitPlayer ${info.version} is available.`,
+    detail: 'It is downloading now. You will be prompted to restart when it is ready.',
+    buttons: ['OK'],
+  });
+});
+
+function checkForUpdates(isManual) {
+  manualUpdateCheck = !!isManual;
+
+  // electron-updater rejects on unsigned/unpackaged (dev) runs — don't let an
+  // update check crash the app. It also emits 'error'; the dialog lives here
+  // rather than in that handler so a failure cannot raise two dialogs.
   autoUpdater.checkForUpdates().catch((err) => {
     console.error('[Updater] check failed:', err.message);
-    if (showNoUpdateDialog && mainWindow) {
+    if (manualUpdateCheck && mainWindow) {
+      manualUpdateCheck = false;
       dialog.showMessageBox(mainWindow, {
         type: 'error',
         title: 'Update Check Failed',
