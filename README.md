@@ -42,9 +42,14 @@ Deep inspection via ffprobe, in a summary view with an expandable **Advanced** s
 #### Professional Format Playback
 - **Containers** — MXF (OP1a), GXF, MPEG-2 Transport & Program Streams, MOV, MP4,
   WMV/ASF, MKV, WebM, AVI, MJ2
-- **Codecs** — H.264, HEVC (incl. 4K), MPEG-2, Apple ProRes (Proxy/LT/422/HQ/4444/4444 XQ),
+- **Video codecs** — H.264, HEVC (incl. 4K), MPEG-2, Apple ProRes (Proxy/LT/422/HQ/4444/4444 XQ),
   DNxHD & DNxHR, JPEG 2000, VC-1, Windows Media
-- Non-native codecs route through the streaming decoder rather than the `<video>` element
+- **Audio codecs** — AAC, MP3, Opus, Vorbis, FLAC play natively; AC-3, E-AC-3, DTS,
+  TrueHD and PCM are decoded through the streaming path
+- A file plays natively only when the container, video codec **and** audio codec are all
+  ones Chromium handles — otherwise it routes through the streaming decoder. Chromium has
+  no AC-3/DTS decoder, so without the audio check those files would play picture with
+  silent audio and no error at all
 
 #### Captions & Subtitles
 - **Sidecar formats** — SRT, WebVTT, SCC (CEA-608), TTML / IMSC1, iTT, DFXP, EBU STL

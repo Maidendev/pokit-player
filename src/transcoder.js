@@ -390,30 +390,43 @@ function parseProbeOutput(output, filePath) {
     }
   }
 
-  // ── MXF container often needs transcode ──
-  if (info.container === 'mxf' && !info.needsTranscode) {
-    info.needsTranscode = true;
-  }
+  // ── Native playback decision ──
+  //
+  // Chromium can play a file directly only when ALL THREE hold: it demuxes the
+  // container, it decodes the video codec, and it decodes the audio codec.
+  // Miss any one and the file has to go through our own decoder.
+  //
+  // Audio is the one that bites quietly. Chromium has no AC-3, E-AC-3, DTS or
+  // TrueHD decoder, so an MKV or MOV carrying those plays picture with SILENT
+  // audio and raises no error at all — the worst possible outcome for a QC
+  // player, because nothing looks wrong.
+  //
+  // Matroska is a deliberate inclusion: `canPlayType('video/x-matroska')`
+  // returns "" in this Electron build, but Chromium sniffs file:// content
+  // rather than trusting the MIME type and its FFmpeg demuxer does read MKV.
+  // Verified playing H.264/AAC and VP9/Opus MKV natively.
+  const nativeVideoCodecs = ['h264', 'avc1', 'vp8', 'vp9', 'av1', 'theora'];
+  const nativeAudioCodecs = ['aac', 'mp3', 'mp4a', 'opus', 'vorbis', 'flac'];
+  const nativeContainers = ['mp4', 'm4v', 'mov', 'webm', 'ogg', 'ogv', 'mkv'];
 
-  // ── Check if codec is natively playable by Chromium ──
-  const nativeCodecs = ['h264', 'avc1', 'vp8', 'vp9', 'av1', 'theora'];
-  if (info.codec && !nativeCodecs.includes(info.codec) && !info.needsTranscode) {
-    info.needsTranscode = true;
-    console.log('[Transcoder] Non-native codec detected:', info.codec, '→ will transcode');
-  }
+  // ProRes/DNxHD/MXF handling above may already have decided; re-derive from
+  // scratch so one rule owns the outcome instead of later lines silently
+  // overriding earlier ones.
+  const videoOk = !info.codec || nativeVideoCodecs.includes(info.codec);
+  const audioOk = !info.audioCodec || nativeAudioCodecs.includes(info.audioCodec);
+  const containerOk = !info.container || nativeContainers.includes(info.container);
 
-  // Special case: h264 in a container Chromium can play
-  const nativeContainers = ['mp4', 'webm', 'ogg', 'ogv', 'm4v'];
-  if (info.codec && nativeCodecs.includes(info.codec)) {
-    // Native codec — check container compatibility
-    if (info.container === 'mkv' || info.container === 'avi' || 
-        info.container === 'flv' || info.container === 'wmv') {
-      // These containers may or may not work — mark for transcode to be safe
-      // Actually Chromium can handle mkv with h264 often, so let's try native first
-      info.needsTranscode = false;
-    } else {
-      info.needsTranscode = false;
-    }
+  info.needsTranscode = !(videoOk && audioOk && containerOk);
+
+  if (info.needsTranscode) {
+    const reasons = [];
+    if (!containerOk) reasons.push('container ' + info.container);
+    if (!videoOk) reasons.push('video ' + info.codec);
+    if (!audioOk) reasons.push('audio ' + info.audioCodec);
+    info.transcodeReason = reasons.join(', ');
+    console.log('[Transcoder] Not natively playable (' + info.transcodeReason + ') → decoding');
+  } else {
+    console.log('[Transcoder] Natively playable:', info.container, info.codec, info.audioCodec || '(no audio)');
   }
 
   // ── Source Timecode ──
