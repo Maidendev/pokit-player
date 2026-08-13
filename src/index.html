@@ -22,6 +22,13 @@
            it survives transcoded and MSE-streamed playback alike -->
       <div id="caption-overlay" class="hidden"><div id="caption-text"></div></div>
 
+      <!-- Always-on channel meters, docked right. Shows at a glance how many
+           audio channels the file carries; fades with the transport bar. -->
+      <div id="meter-hud" class="hidden">
+        <div id="meter-hud-bars"></div>
+        <div id="meter-hud-label">—</div>
+      </div>
+
       <!-- Drop Zone Overlay -->
       <div id="drop-zone" class="visible">
         <div class="drop-zone-content">

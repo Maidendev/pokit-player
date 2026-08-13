@@ -536,6 +536,76 @@ html, body {
   font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
 }
 
+/* Channel meter HUD — thin, docked right, fades with the transport bar */
+#meter-hud {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  padding: 8px 7px;
+  background: rgba(0, 0, 0, 0.42);
+  border-radius: 5px;
+  pointer-events: none;   /* never steal clicks from the video */
+  z-index: 25;
+  opacity: 1;
+  transition: opacity 0.25s ease;
+}
+
+/* Matches the transport bar's own fade so the two move together */
+#meter-hud.controls-hidden {
+  opacity: 0;
+}
+
+#meter-hud-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 110px;
+}
+
+.hud-channel {
+  position: relative;
+  width: 5px;
+  height: 100%;
+  background: rgba(255, 255, 255, 0.13);
+  border-radius: 1px;
+  overflow: hidden;
+}
+
+.hud-fill {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 0;
+  background: linear-gradient(to top, #2ecc71 0%, #2ecc71 62%, #f1c40f 84%, #e74c3c 100%);
+}
+
+/* Peak-hold tick, so short transients stay readable on a 5px-wide bar */
+.hud-peak {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.85);
+}
+
+.hud-channel.clipped {
+  box-shadow: 0 0 0 1px #e74c3c;
+}
+
+#meter-hud-label {
+  font-size: 9px;
+  letter-spacing: 0.4px;
+  color: rgba(255, 255, 255, 0.75);
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  white-space: nowrap;
+}
+
 /* Caption overlay */
 #caption-overlay {
   position: absolute;

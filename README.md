@@ -58,6 +58,9 @@ Deep inspection via ffprobe, in a summary view with an expandable **Advanced** s
 - Malformed caption files report a specific parse error instead of failing silently
 
 #### Audio Meters & Loudness (`⌘L` / `Ctrl+L`)
+- Always-on channel meters docked to the right of the picture — one thin bar per
+  channel, so the track count and layout (STEREO, 5.1, …) are readable at a glance.
+  Fades with the transport bar when the mouse goes idle
 - Per-channel meters with speaker labels, peak hold, and solo/mute per channel
 - Program loudness to **ITU-R BS.1770** via `ebur128`: integrated, LRA, max true peak
 - Gated (BS.1770-3/-4) and ungated (BS.1770-2) modes

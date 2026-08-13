@@ -1162,6 +1162,7 @@
     if (!hasVideoLoaded) return;
     controlsBar.classList.remove('hidden');
     controlsBar.classList.add('visible');
+    meterHud.classList.remove('controls-hidden');
     document.body.style.cursor = 'default';
     clearTimeout(controlsTimeout);
     if (!video.paused) {
@@ -1173,6 +1174,10 @@
     if (isTimelineDragging) return;
     controlsBar.classList.remove('visible');
     controlsBar.classList.add('hidden');
+    // Fades the meter HUD out alongside the transport rather than hiding it,
+    // so the metering loop keeps running and levels are already correct when
+    // the mouse comes back.
+    meterHud.classList.add('controls-hidden');
     document.body.style.cursor = 'none';
   }
 
@@ -1292,6 +1297,9 @@
 
   video.addEventListener('play', () => {
     updatePlayButton(); showControls(); resyncSecondaryAudio(true);
+    // First play is the user gesture that lets an AudioContext start, so the
+    // meters are wired up here rather than at load.
+    initChannelMeters();
   });
   video.addEventListener('pause', () => {
     updatePlayButton(); showControls(); clearTimeout(controlsTimeout);
@@ -1497,6 +1505,9 @@
     // Inspection runs its own ffprobe passes, so let the panel paint first and
     // fill in the deep detail when it lands.
     currentInspection = null;
+    // Drop the previous file's channel strips; the next play rebuilds them for
+    // whatever this file turns out to carry.
+    teardownChannelMeters();
     try {
       const inspection = await window.electronAPI.inspectFile(filePath);
       if (inspection && !inspection.error) {
@@ -1512,6 +1523,10 @@
           frameDuration = 1 / frameRate;
           updateTimecode();
         }
+
+        // Now that the real channel count and speaker labels are known, the
+        // meters can be rebuilt to match (the first build guesses stereo).
+        if (!video.paused) initChannelMeters();
       } else if (inspection && inspection.error) {
         console.warn('[Renderer] Inspection failed:', inspection.error);
       }
@@ -2000,10 +2015,16 @@
   const loudnessTargetSel = document.getElementById('loudness-target');
   const loudnessGatingSel = document.getElementById('loudness-gating');
 
+  const meterHud = document.getElementById('meter-hud');
+  const meterHudBars = document.getElementById('meter-hud-bars');
+  const meterHudLabel = document.getElementById('meter-hud-label');
+
   let audioCtx = null;
   let meterSourceNode = null;  // MediaElementAudioSourceNode (not the MSE MediaSource)
-  let channelStrips = [];   // { index, label, analyser, gain, muted, soloed, els }
+  // One entry per channel, each feeding BOTH the always-on HUD and the panel.
+  let channelStrips = [];
   let meterRAF = null;
+  let meterChannelCount = 0;   // what the current graph was built for
 
   /**
    * Build the metering graph:
@@ -2034,8 +2055,10 @@
     });
     channelStrips = [];
     meterRack.innerHTML = '';
+    meterHudBars.innerHTML = '';
 
     const count = Math.max(1, Math.min(channelCount || 2, 32));
+    meterChannelCount = count;
     const splitter = audioCtx.createChannelSplitter(count);
     const merger = audioCtx.createChannelMerger(count);
     meterSourceNode.connect(splitter);
@@ -2085,9 +2108,22 @@
       strip.appendChild(btns);
       meterRack.appendChild(strip);
 
+      // Same channel, second view: a thin bar in the always-on HUD.
+      const hudChannel = document.createElement('div');
+      hudChannel.className = 'hud-channel';
+      hudChannel.title = (labels && labels[i]) || 'Ch ' + (i + 1);
+      const hudFill = document.createElement('div');
+      hudFill.className = 'hud-fill';
+      const hudPeak = document.createElement('div');
+      hudPeak.className = 'hud-peak';
+      hudChannel.appendChild(hudFill);
+      hudChannel.appendChild(hudPeak);
+      meterHudBars.appendChild(hudChannel);
+
       const stripState = {
         index: i, gain, analyser, muted: false, soloed: false,
         els: { fill, peakLine, value, btnMute, btnSolo },
+        hud: { channel: hudChannel, fill: hudFill, peak: hudPeak },
         peakHold: 0, peakHoldAt: 0,
       };
       btnMute.addEventListener('click', () => {
@@ -2104,8 +2140,50 @@
     }
 
     merger.connect(audioCtx.destination);
+
+    // Name the layout rather than just the count — "5.1" tells a QC operator
+    // more than "6 ch", and discrete tracks are worth calling out explicitly.
+    const layout = currentInspection && currentInspection.audio[0] &&
+      currentInspection.audio[0].channelLayout;
+    meterHudLabel.textContent = layout ? layout.toUpperCase() : count + ' CH';
+    meterHud.classList.remove('hidden');
+
     applyChannelRouting();
     startMeterLoop();
+  }
+
+  /**
+   * Bring the meters up for the current file. Deferred until playback starts
+   * because creating a MediaElementAudioSourceNode routes ALL audio through
+   * the graph — do that against a suspended AudioContext and playback goes
+   * silent. The first play is a user gesture, so the context can resume.
+   */
+  function initChannelMeters() {
+    if (!hasVideoLoaded) return;
+
+    const track = currentInspection && currentInspection.audio && currentInspection.audio[0];
+    if (currentInspection && !track) {
+      // Inspected and definitively has no audio — keep the HUD out of the way.
+      meterHud.classList.add('hidden');
+      return;
+    }
+
+    const count = Math.max(1, Math.min((track && track.channels) || 2, 32));
+    if (channelStrips.length && count === meterChannelCount) return;  // already built
+
+    if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+    buildMeters(count, track && track.speakerLabels);
+  }
+
+  function teardownChannelMeters() {
+    channelStrips.forEach((s) => {
+      try { s.gain.disconnect(); s.analyser.disconnect(); } catch (_) { /* ignore */ }
+    });
+    channelStrips = [];
+    meterChannelCount = 0;
+    meterHudBars.innerHTML = '';
+    meterRack.innerHTML = '';
+    meterHud.classList.add('hidden');
   }
 
   // Solo wins over mute: if anything is soloed, only soloed channels are heard.
@@ -2132,7 +2210,13 @@
     const buf = new Float32Array(2048);
 
     const tick = () => {
-      if (!audioPanel.classList.contains('hidden') && channelStrips.length) {
+      const panelOpen = !audioPanel.classList.contains('hidden');
+      // The HUD is faded with opacity rather than display, so its own hidden
+      // class is what says "no audio here", not whether the controls are up.
+      const hudLive = !meterHud.classList.contains('hidden');
+
+      if (channelStrips.length && (panelOpen || hudLive)) {
+        const now = performance.now();
         for (const s of channelStrips) {
           s.analyser.getFloatTimeDomainData(buf);
           let peak = 0;
@@ -2145,18 +2229,28 @@
           const rms = Math.sqrt(sumSquares / buf.length);
           const peakDb = amplitudeToDb(peak);
           const rmsDb = amplitudeToDb(rms);
-
-          s.els.fill.style.height = (dbToMeterFraction(rmsDb) * 100) + '%';
-          s.els.fill.classList.toggle('over', peakDb > -0.1);
+          const rmsPct = dbToMeterFraction(rmsDb) * 100;
 
           // Peak hold decays after 1.5s rather than sticking forever.
-          const now = performance.now();
           if (peakDb > s.peakHold || now - s.peakHoldAt > 1500) {
             s.peakHold = peakDb;
             s.peakHoldAt = now;
           }
-          s.els.peakLine.style.bottom = (dbToMeterFraction(s.peakHold) * 100) + '%';
-          s.els.value.textContent = isFinite(s.peakHold) ? s.peakHold.toFixed(1) : '−∞';
+          const peakPct = dbToMeterFraction(s.peakHold) * 100;
+          const clipped = peakDb > -0.1;
+
+          if (hudLive) {
+            s.hud.fill.style.height = rmsPct + '%';
+            s.hud.peak.style.bottom = peakPct + '%';
+            s.hud.channel.classList.toggle('clipped', clipped);
+          }
+
+          if (panelOpen) {
+            s.els.fill.style.height = rmsPct + '%';
+            s.els.fill.classList.toggle('over', clipped);
+            s.els.peakLine.style.bottom = peakPct + '%';
+            s.els.value.textContent = isFinite(s.peakHold) ? s.peakHold.toFixed(1) : '−∞';
+          }
         }
       }
       meterRAF = requestAnimationFrame(tick);
@@ -2173,8 +2267,7 @@
     if (wasHidden) {
       // A user gesture is required before an AudioContext may start.
       if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
-      const track = currentInspection && currentInspection.audio && currentInspection.audio[0];
-      buildMeters(track ? track.channels : 2, track ? track.speakerLabels : null);
+      initChannelMeters();
     }
   }
 
@@ -2404,6 +2497,6 @@
   // ─── Initial State ────────────────────────────────────
   updateVolumeIcon();
   updatePlayButton();
-  console.log('[Renderer] PokitPlayer v1.2.3 initialized');
+  console.log('[Renderer] PokitPlayer v1.2.4 initialized');
 
 })();
