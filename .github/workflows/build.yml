@@ -71,6 +71,14 @@ jobs:
       - name: Build
         shell: bash
         run: |
+          # A secret that doesn't exist still arrives as a DEFINED, empty env
+          # var. electron-builder reads a defined CSC_LINK as a path to a
+          # certificate, resolves "" to the repo root, and dies with
+          # "<repo root> not a file". Unset these unless they carry a value so
+          # the unsigned path behaves as if they were never referenced.
+          if [[ -z "${CSC_LINK:-}" ]]; then unset CSC_LINK CSC_KEY_PASSWORD; fi
+          if [[ -z "${APPLE_ID:-}" ]]; then unset APPLE_ID APPLE_ID_PASSWORD APPLE_TEAM_ID; fi
+
           if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
             npx electron-builder ${{ matrix.platformFlag }} --publish always
           else
