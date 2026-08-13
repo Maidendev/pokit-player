@@ -82,7 +82,11 @@ jobs:
           # when those secrets are absent electron-builder logs that it cannot
           # find a certificate and produces an unsigned build rather than
           # failing, so this stays safe before the secrets are added.
-          CSC_IDENTITY_AUTO_DISCOVERY: ${{ matrix.os == 'macos-latest' && 'true' || 'false' }}
+          # Only turn identity discovery on when a certificate is actually
+          # present. With it on and no cert in the keychain, electron-builder
+          # tries to sign and fails the build — which is what happened when
+          # this was unconditionally 'true' on macOS.
+          CSC_IDENTITY_AUTO_DISCOVERY: ${{ (matrix.os == 'macos-latest' && secrets.MAC_CSC_LINK != '') && 'true' || 'false' }}
           # Base64-encoded .p12 and its password.
           CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
