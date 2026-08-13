@@ -630,6 +630,15 @@ ipcMain.handle('start-stream', async (_event, filePath, seekTime = 0) => {
   }
 });
 
+// Backpressure: the renderer asks the decoder to hold off once it has enough
+// media buffered ahead, so a fast decode cannot saturate the UI thread.
+ipcMain.handle('set-stream-flow', async (_event, shouldFlow) => {
+  if (!streamDecoder) return false;
+  if (shouldFlow) streamDecoder.resumeFlow();
+  else streamDecoder.pauseFlow();
+  return true;
+});
+
 ipcMain.handle('stop-stream', async () => {
   console.log('[Main] IPC: stop-stream');
   if (streamDecoder) {

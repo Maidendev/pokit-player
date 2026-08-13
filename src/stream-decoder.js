@@ -26,11 +26,38 @@ class StreamDecoder {
     this.filePath = null;
     this.probeInfo = null;
 
+    this.flowPaused = false;
+
     // Callbacks (set by caller)
     this.onData = null;    // (Buffer) => void
     this.onEnd = null;     // () => void
     this.onError = null;   // (string) => void
     this.onProgress = null; // (number) => void  — current time in seconds
+  }
+
+  /**
+   * Backpressure control.
+   *
+   * ffmpeg decodes far faster than realtime — a 60s ProRes clip finishes in
+   * about 7s — and every chunk it emits crosses IPC and is appended on the
+   * renderer's main thread. Left unthrottled that saturates the UI thread for
+   * as long as the decode runs, so the transport controls stop responding
+   * until the whole file has streamed.
+   *
+   * Pausing stdout stops the 'data' events AND lets the OS pipe fill, which
+   * blocks ffmpeg's own writes — so the decoder ends up running at roughly the
+   * rate the player consumes, instead of flat out.
+   */
+  pauseFlow() {
+    if (!this.process || !this.process.stdout || this.flowPaused) return;
+    this.process.stdout.pause();
+    this.flowPaused = true;
+  }
+
+  resumeFlow() {
+    if (!this.process || !this.process.stdout || !this.flowPaused) return;
+    this.process.stdout.resume();
+    this.flowPaused = false;
   }
 
   /**
@@ -102,6 +129,7 @@ class StreamDecoder {
         windowsHide: true,
         stdio: ['ignore', 'pipe', 'pipe'],
       });
+      this.flowPaused = false;   // fresh process starts flowing
     } catch (err) {
       console.error('[StreamDecoder] Spawn error:', err.message);
       this.active = false;

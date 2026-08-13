@@ -387,6 +387,7 @@
     sourceBuffer.addEventListener('updateend', () => {
       isAppending = false;
       flushPendingBuffers();
+      updateStreamBackpressure();
 
       // Auto-play after first successful append
       if (firstDataReceived && video.paused && video.readyState >= 2) {
@@ -450,6 +451,46 @@
 
     pendingBuffers.push(arrayBuffer);
     flushPendingBuffers();
+  }
+
+  // ── Streaming backpressure ────────────────────────────
+  //
+  // ffmpeg decodes much faster than realtime, so without this the decoder
+  // races ahead and the constant IPC + appendBuffer work pins the main thread,
+  // leaving the transport controls unresponsive until the whole file has
+  // streamed. Holding roughly half a minute of media ahead of the playhead
+  // keeps playback and seeking smooth while leaving the UI thread idle.
+  const STREAM_BUFFER_HIGH_WATER = 30;   // seconds ahead → tell ffmpeg to wait
+  const STREAM_BUFFER_LOW_WATER = 12;    // seconds ahead → let it run again
+  let streamFlowPaused = false;
+
+  /** Seconds of contiguous media buffered ahead of the playhead. */
+  function bufferedAhead() {
+    if (!sourceBuffer) return 0;
+    let ranges;
+    try {
+      ranges = sourceBuffer.buffered;
+    } catch (_) {
+      return 0;   // throws if the SourceBuffer has been removed
+    }
+    const t = video.currentTime;
+    for (let i = 0; i < ranges.length; i++) {
+      if (t >= ranges.start(i) - 0.5 && t <= ranges.end(i)) return ranges.end(i) - t;
+    }
+    return 0;
+  }
+
+  function updateStreamBackpressure() {
+    if (!streamMode) return;
+    const ahead = bufferedAhead();
+
+    if (!streamFlowPaused && ahead > STREAM_BUFFER_HIGH_WATER) {
+      streamFlowPaused = true;
+      window.electronAPI.setStreamFlow(false);
+    } else if (streamFlowPaused && ahead < STREAM_BUFFER_LOW_WATER) {
+      streamFlowPaused = false;
+      window.electronAPI.setStreamFlow(true);
+    }
   }
 
   /**
@@ -586,6 +627,9 @@
     streamEnded = false;
     firstDataReceived = false;
     pendingBuffers = [];
+    // The old decoder is gone; the replacement starts unthrottled, so clear
+    // the flag or we would never ask the new one to resume.
+    streamFlowPaused = false;
 
     // Wait for any pending update to finish
     if (sourceBuffer && sourceBuffer.updating) {
@@ -1314,6 +1358,8 @@
   });
   video.addEventListener('timeupdate', () => {
     updateTimecode(); updateTimeline(); updateBuffered();
+    // Playback drains the buffer, so this is where the decoder gets let go again.
+    updateStreamBackpressure();
     if (gopVisible) refreshGopStrip();
     updateCaptionOverlay();
     resyncSecondaryAudio();
@@ -2497,6 +2543,6 @@
   // ─── Initial State ────────────────────────────────────
   updateVolumeIcon();
   updatePlayButton();
-  console.log('[Renderer] PokitPlayer v1.2.4 initialized');
+  console.log('[Renderer] PokitPlayer v1.2.5 initialized');
 
 })();

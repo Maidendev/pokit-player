@@ -44,6 +44,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   startStream: (filePath, seekTime) => ipcRenderer.invoke('start-stream', filePath, seekTime),
   stopStream: () => ipcRenderer.invoke('stop-stream'),
   seekStream: (time) => ipcRenderer.invoke('seek-stream', time),
+  setStreamFlow: (shouldFlow) => ipcRenderer.invoke('set-stream-flow', shouldFlow),
 
   // Receive events from main process
   onOpenFile: (callback) => ipcRenderer.on('open-file', (_e, path) => callback(path)),
