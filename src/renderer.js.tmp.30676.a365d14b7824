@@ -483,6 +483,7 @@
   function updateStreamBackpressure() {
     if (!streamMode) return;
     const ahead = bufferedAhead();
+    if (window.__lagProbe) window.__lagProbe.ahead = ahead;
 
     if (!streamFlowPaused && ahead > STREAM_BUFFER_HIGH_WATER) {
       streamFlowPaused = true;
@@ -2063,7 +2064,6 @@
 
   const meterHud = document.getElementById('meter-hud');
   const meterHudBars = document.getElementById('meter-hud-bars');
-  const meterHudLabels = document.getElementById('meter-hud-labels');
   const meterHudLabel = document.getElementById('meter-hud-label');
 
   let audioCtx = null;
@@ -2103,7 +2103,6 @@
     channelStrips = [];
     meterRack.innerHTML = '';
     meterHudBars.innerHTML = '';
-    meterHudLabels.innerHTML = '';
 
     const count = Math.max(1, Math.min(channelCount || 2, 32));
     meterChannelCount = count;
@@ -2168,11 +2167,6 @@
       hudChannel.appendChild(hudPeak);
       meterHudBars.appendChild(hudChannel);
 
-      const hudName = document.createElement('div');
-      hudName.className = 'hud-channel-name';
-      hudName.textContent = (labels && labels[i]) || String(i + 1);
-      meterHudLabels.appendChild(hudName);
-
       const stripState = {
         index: i, gain, analyser, muted: false, soloed: false,
         els: { fill, peakLine, value, btnMute, btnSolo },
@@ -2194,59 +2188,15 @@
 
     merger.connect(audioCtx.destination);
 
-    meterHudLabel.textContent = describeAudioLayout(count);
+    // Name the layout rather than just the count — "5.1" tells a QC operator
+    // more than "6 ch", and discrete tracks are worth calling out explicitly.
+    const layout = currentInspection && currentInspection.audio[0] &&
+      currentInspection.audio[0].channelLayout;
+    meterHudLabel.textContent = layout ? layout.toUpperCase() : count + ' CH';
     meterHud.classList.remove('hidden');
 
     applyChannelRouting();
     startMeterLoop();
-  }
-
-  /**
-   * Total audio channels the FILE carries, across every track. Pro masters
-   * routinely split audio into discrete mono tracks — a stereo pair as two
-   * monos, 5.1 as six — and reading only the first track reports "1 CH" for
-   * what is really a stereo programme.
-   */
-  function totalFileChannels() {
-    if (!currentInspection || !currentInspection.audio.length) return 0;
-    return currentInspection.audio.reduce((sum, a) => sum + (a.channels || 0), 0);
-  }
-
-  /**
-   * Per-channel captions. A single multichannel track uses its own speaker
-   * labels; separate mono tracks are named by track, except a plain pair which
-   * is by convention the L/R of a stereo programme.
-   */
-  function channelNames(count) {
-    if (!currentInspection || !currentInspection.audio.length) {
-      return Array.from({ length: count }, (_, i) => String(i + 1));
-    }
-    const tracks = currentInspection.audio;
-    if (tracks.length === 1) return tracks[0].speakerLabels.slice(0, count);
-    if (tracks.length === 2 && tracks.every((t) => t.channels === 1)) return ['L', 'R'];
-
-    const names = [];
-    tracks.forEach((t, ti) => {
-      if (t.channels === 1) names.push('T' + (ti + 1));
-      else t.speakerLabels.forEach((l) => names.push(l));
-    });
-    return names.slice(0, count);
-  }
-
-  /** Human-readable summary of the audio layout, shown under the meters. */
-  function describeAudioLayout(count) {
-    const tracks = (currentInspection && currentInspection.audio) || [];
-
-    if (tracks.length > 1 && tracks.every((t) => t.channels === 1)) {
-      // Two discrete monos is how a stereo pair is normally delivered.
-      return tracks.length === 2 ? '2 × MONO (PAIR)' : tracks.length + ' × MONO';
-    }
-    if (tracks.length === 1 && tracks[0].channelLayout) {
-      return tracks[0].channelLayout.toUpperCase();
-    }
-    if (count === 1) return 'MONO';
-    if (count === 2) return 'STEREO';
-    return count + ' CH';
   }
 
   /**
@@ -2258,19 +2208,18 @@
   function initChannelMeters() {
     if (!hasVideoLoaded) return;
 
-    if (currentInspection && !currentInspection.audio.length) {
+    const track = currentInspection && currentInspection.audio && currentInspection.audio[0];
+    if (currentInspection && !track) {
       // Inspected and definitively has no audio — keep the HUD out of the way.
       meterHud.classList.add('hidden');
       return;
     }
 
-    // Count every track, not just the first: the decoder now merges discrete
-    // mono tracks into one stream, so all of them are audible and meterable.
-    const count = Math.max(1, Math.min(totalFileChannels() || 2, 8));
+    const count = Math.max(1, Math.min((track && track.channels) || 2, 32));
     if (channelStrips.length && count === meterChannelCount) return;  // already built
 
     if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
-    buildMeters(count, channelNames(count));
+    buildMeters(count, track && track.speakerLabels);
   }
 
   function teardownChannelMeters() {
@@ -2280,7 +2229,6 @@
     channelStrips = [];
     meterChannelCount = 0;
     meterHudBars.innerHTML = '';
-    meterHudLabels.innerHTML = '';
     meterRack.innerHTML = '';
     meterHud.classList.add('hidden');
   }
@@ -2596,6 +2544,6 @@
   // ─── Initial State ────────────────────────────────────
   updateVolumeIcon();
   updatePlayButton();
-  console.log('[Renderer] PokitPlayer v1.2.6 initialized');
+  console.log('[Renderer] PokitPlayer v1.2.5 initialized');
 
 })();

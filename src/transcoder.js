@@ -325,6 +325,25 @@ function parseProbeOutput(output, filePath) {
   //         "Audio: aac (LC) (mp4a / ...), 44100 Hz, stereo, fltp, 128 kb/s"
   // Audio: pcm_s16le (sowt / 0x74776F73), 44100 Hz, mono, s16, 705 kb/s
   // Audio: aac (LC) (mp4a / 0x6134706D), 44100 Hz, mono, fltp, 69 kb/s
+  // Professional masters routinely carry audio as several discrete mono
+  // tracks (a stereo pair as two mono streams, or 5.1 as six). ffmpeg's
+  // default stream selection would keep only ONE of them, so the decoder needs
+  // to know how many exist and how wide each is.
+  const audioStreamLines = output.match(/Stream #\d+:\d+.*: Audio:.*/g) || [];
+  info.audioStreamCount = audioStreamLines.length;
+  info.audioChannelsTotal = audioStreamLines.reduce((total, line) => {
+    if (/\b(\d+)(?:\.(\d+))? channels?\b/.test(line)) {
+      const m = line.match(/\b(\d+)(?:\.(\d+))? channels?\b/);
+      return total + parseInt(m[1], 10) + (m[2] ? parseInt(m[2], 10) : 0);
+    }
+    if (/\bmono\b/.test(line)) return total + 1;
+    if (/\bstereo\b/.test(line)) return total + 2;
+    if (/\b5\.1\b/.test(line)) return total + 6;
+    if (/\b7\.1\b/.test(line)) return total + 8;
+    if (/\bquad\b/.test(line)) return total + 4;
+    return total + 1;   // unknown layout — assume one channel rather than zero
+  }, 0);
+
   const audioLine = output.match(/Audio:\s*(.+)/);
   if (audioLine) {
     const aCodecMatch = audioLine[1].match(/^(\w+)/);

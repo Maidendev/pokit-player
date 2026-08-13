@@ -103,14 +103,38 @@ class StreamDecoder {
 
     // Audio encoding (if present)
     if (hasAudio) {
+      const audioStreams = probeInfo.audioStreamCount || 1;
+      // AAC tops out at 8 channels, and Chromium will not decode more than
+      // that in MP4 either.
+      const totalChannels = Math.min(probeInfo.audioChannelsTotal || 2, 8);
+
+      if (audioStreams > 1) {
+        // Discrete tracks (a stereo pair carried as two monos, 5.1 as six
+        // monos). Without an explicit map ffmpeg keeps only ONE of them, so
+        // every other track would be inaudible and unmeterable. amerge
+        // interleaves them into a single stream that preserves each track as
+        // its own channel.
+        const inputs = Array.from({ length: audioStreams }, (_, i) => '[0:a:' + i + ']').join('');
+        args.push(
+          '-filter_complex', inputs + 'amerge=inputs=' + audioStreams + '[aout]',
+          '-map', '0:v:0',
+          '-map', '[aout]'
+        );
+      } else {
+        args.push('-map', '0:v:0', '-map', '0:a:0');
+      }
+
       args.push(
         '-c:a', 'aac',
-        '-b:a', '192k',
-        '-ac', '2',
+        '-b:a', totalChannels > 2 ? '384k' : '192k',
+        // Preserve the source channel count. Forcing stereo here used to
+        // collapse 5.1 masters down to two channels, making it impossible to
+        // meter or hear the surrounds.
+        '-ac', String(Math.max(1, totalChannels)),
         '-ar', '48000'
       );
     } else {
-      args.push('-an');
+      args.push('-map', '0:v:0', '-an');
     }
 
     // Output: fragmented MP4 to stdout

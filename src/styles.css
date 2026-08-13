@@ -563,17 +563,32 @@ html, body {
 #meter-hud-bars {
   display: flex;
   align-items: flex-end;
-  gap: 3px;
-  height: 110px;
+  gap: 5px;
+  height: 170px;
 }
 
 .hud-channel {
   position: relative;
-  width: 5px;
+  width: 11px;
   height: 100%;
   background: rgba(255, 255, 255, 0.13);
-  border-radius: 1px;
+  border-radius: 2px;
   overflow: hidden;
+}
+
+/* Per-channel caption under each bar (L, R, C, LFE…) */
+#meter-hud-labels {
+  display: flex;
+  gap: 5px;
+}
+
+.hud-channel-name {
+  width: 11px;
+  text-align: center;
+  font-size: 8px;
+  line-height: 1.2;
+  color: rgba(255, 255, 255, 0.6);
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
 }
 
 .hud-fill {
