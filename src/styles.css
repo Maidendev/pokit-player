@@ -881,7 +881,14 @@ html, body {
 
 /* Utility */
 .hidden {
-  /* used as toggle class for elements that should use display:none */
+  /* This was previously an empty rule, so `classList.add('hidden')` did
+     nothing unless the element also had its own `#id.hidden { display: none }`
+     rule. Elements that lacked one — the pause / fullscreen-exit / volume
+     icons, and every panel added since — stayed permanently on screen.
+     `!important` is required, not stylistic: an id selector such as
+     `#sync-bar { display: flex }` outranks a bare class selector, so
+     `display: none` alone would keep losing. */
+  display: none !important;
 }
 
 /* Scrollbar */
