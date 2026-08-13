@@ -2,7 +2,10 @@ name: Build installers
 
 on:
   push:
-    branches: [main]
+    # feat/** builds both platforms without opening a PR. It never publishes —
+    # only a v* tag does that — so this is a safe way to get a macOS build off
+    # a Windows workstation.
+    branches: [main, 'feat/**']
     tags: ['v*']
   pull_request:
     branches: [main]
