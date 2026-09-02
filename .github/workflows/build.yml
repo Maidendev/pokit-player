@@ -86,17 +86,38 @@ jobs:
       - name: Report signing configuration
         if: matrix.os == 'macos-latest'
         shell: bash
+        # Secrets arrive through env, never through ${{ }} interpolation into
+        # the script body: that would write the whole base64 signing
+        # certificate into the command line of a temp file on the runner.
+        # Only the emptiness of each value is ever tested here.
+        env:
+          HAS_CERT: ${{ secrets.MAC_CSC_LINK != '' }}
+          HAS_CERT_PW: ${{ secrets.MAC_CSC_KEY_PASSWORD != '' }}
+          HAS_APPLE_ID: ${{ secrets.APPLE_ID != '' }}
+          HAS_APPLE_PW: ${{ secrets.APPLE_ID_PASSWORD != '' }}
+          HAS_TEAM_ID: ${{ secrets.APPLE_TEAM_ID != '' }}
         run: |
-          if [[ -n "${{ secrets.MAC_CSC_LINK }}" ]]; then
-            echo "macOS code signing: ENABLED (MAC_CSC_LINK present)"
+          echo "MAC_CSC_LINK         present: $HAS_CERT"
+          echo "MAC_CSC_KEY_PASSWORD present: $HAS_CERT_PW"
+          echo "APPLE_ID             present: $HAS_APPLE_ID"
+          echo "APPLE_ID_PASSWORD    present: $HAS_APPLE_PW"
+          echo "APPLE_TEAM_ID        present: $HAS_TEAM_ID"
+          echo
+
+          if [[ "$HAS_CERT" == "true" && "$HAS_CERT_PW" == "true" ]]; then
+            echo "macOS code signing: ENABLED"
           else
-            echo "macOS code signing: DISABLED — no MAC_CSC_LINK secret."
-            echo "Build will be unsigned; users will see a Gatekeeper warning."
+            echo "macOS code signing: DISABLED — MAC_CSC_LINK and/or"
+            echo "MAC_CSC_KEY_PASSWORD missing. Build will be unsigned and"
+            echo "Gatekeeper will refuse to open it on other people's Macs."
           fi
-          if [[ -n "${{ secrets.APPLE_ID }}" && -n "${{ secrets.APPLE_TEAM_ID }}" ]]; then
+
+          if [[ "$HAS_APPLE_ID" == "true" && "$HAS_APPLE_PW" == "true" && "$HAS_TEAM_ID" == "true" ]]; then
             echo "Notarization: ENABLED"
           else
-            echo "Notarization: DISABLED — APPLE_ID / APPLE_TEAM_ID not set."
+            echo "Notarization: DISABLED — APPLE_ID, APPLE_ID_PASSWORD or"
+            echo "APPLE_TEAM_ID missing. A signed-but-unnotarized app still"
+            echo "warns on first launch."
           fi
 
       # On a version tag, publish straight to a GitHub Release — that Release
