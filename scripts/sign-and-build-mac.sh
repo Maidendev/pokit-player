@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# PokitPlayer — Signed & Notarized macOS Build Script
+# MaidenPlayer — Signed & Notarized macOS Build Script
 # ===================================================
 #
 # This script takes your Apple Developer credentials, configures the signing
@@ -76,7 +76,7 @@ err()  { echo "${RED}❌ $*${RST}" >&2; }
 
 echo ""
 echo "${CYN}══════════════════════════════════════════════════════════${RST}"
-echo "${CYN}   PokitPlayer — Signed & Notarized macOS Build${RST}"
+echo "${CYN}   MaidenPlayer — Signed & Notarized macOS Build${RST}"
 echo "${CYN}══════════════════════════════════════════════════════════${RST}"
 echo ""
 
@@ -197,5 +197,5 @@ echo "${GRN}══════════════════════�
 ls -lh dist/*.dmg dist/*.zip 2>/dev/null || true
 echo ""
 echo "Next: verify Gatekeeper acceptance with:"
-echo "   spctl -a -vvv -t install \"dist/PokitPlayer-1.1.2-arm64.dmg\""
+echo "   spctl -a -vvv -t install \"dist/MaidenPlayer-1.1.2-arm64.dmg\""
 echo ""

@@ -1,5 +1,5 @@
 /**
- * PokitPlayer — macOS Notarization Script
+ * MaidenPlayer — macOS Notarization Script
  *
  * This script runs automatically after code signing via electron-builder's
  * "afterSign" hook. It submits the signed .app to Apple's notarization

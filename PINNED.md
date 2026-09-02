@@ -1,4 +1,4 @@
-# PokitPlayer — Pinned Work
+# MaidenPlayer — Pinned Work
 
 **Owner:** Maiden Media Solutions INC.
 **Source spec:** `PRO_PLAYBACK_FEATURE_SPEC.md`
@@ -191,8 +191,8 @@ when the certificate is added.
 
 ### latest.yml filename mismatch
 
-The auto-update manifest names `PokitPlayer-Setup-<version>.exe` (hyphens) while the built
-artifact is `PokitPlayer Setup <version>.exe` (spaces). Upload the file under the
+The auto-update manifest names `MaidenPlayer-Setup-<version>.exe` (hyphens) while the built
+artifact is `MaidenPlayer Setup <version>.exe` (spaces). Upload the file under the
 hyphenated name or auto-update 404s. Pre-existing, unrelated to this work.
 
 ### Electron 28

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================
 # check-notarization-status.sh
-# Quick status checker for PokitPlayer v1.1.3 notarization
+# Quick status checker for MaidenPlayer v1.1.3 notarization
 #
 # Usage: ./scripts/check-notarization-status.sh
 # ============================================================
@@ -22,7 +22,7 @@ if [ ! -f "$KEY" ]; then
 fi
 
 echo "==================================================="
-echo "PokitPlayer v1.1.3 Notarization Status"
+echo "MaidenPlayer v1.1.3 Notarization Status"
 echo "==================================================="
 echo ""
 

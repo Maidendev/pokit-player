@@ -1,0 +1,17 @@
+# Scripts that execute on macOS/Linux MUST be stored and checked out with LF.
+# This repo is authored on Windows with core.autocrlf=true, which had been
+# committing CRLF into the .sh files — bash then fails on the stray carriage
+# return with "$'\r': command not found" or "bad interpreter: ...^M".
+*.sh     text eol=lf
+*.py     text eol=lf
+*.plist  text eol=lf
+
+# Binary assets — never touch line endings, never diff as text.
+*.png    binary
+*.ico    binary
+*.icns   binary
+*.jpg    binary
+*.jpeg   binary
+*.psd    binary
+*.mov    binary
+*.p12    binary

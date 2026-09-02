@@ -1,5 +1,5 @@
 /**
- * PokitPlayer — Caption & Subtitle Module
+ * MaidenPlayer — Caption & Subtitle Module
  *
  * Parses the sidecar timed-text formats delivery specs require into one cue
  * model, and extracts embedded CEA-608 captions out of MXF / MPEG-TS / MOV so

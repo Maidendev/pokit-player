@@ -26,14 +26,14 @@ wait_for() {  # $1=id $2=label
 
 ARM64_OK=0; X64_OK=0
 if wait_for "$ARM64_ID" "arm64"; then
-  rcodesign staple "dist/mac-arm64/PokitPlayer.app" >> "$LOG" 2>&1 && { echo "[$(date -u +%T)] arm64 STAPLED" >> "$LOG"; ARM64_OK=1; }
+  rcodesign staple "dist/mac-arm64/MaidenPlayer.app" >> "$LOG" 2>&1 && { echo "[$(date -u +%T)] arm64 STAPLED" >> "$LOG"; ARM64_OK=1; }
 fi
 if wait_for "$X64_ID" "x64"; then
-  rcodesign staple "dist/mac/PokitPlayer.app" >> "$LOG" 2>&1 && { echo "[$(date -u +%T)] x64 STAPLED" >> "$LOG"; X64_OK=1; }
+  rcodesign staple "dist/mac/MaidenPlayer.app" >> "$LOG" 2>&1 && { echo "[$(date -u +%T)] x64 STAPLED" >> "$LOG"; X64_OK=1; }
 fi
 
 cd dist
-[ "$ARM64_OK" = "1" ] && ( cd mac-arm64 && zip -ry -q ../PokitPlayer-1.1.3-arm64-notarized.zip "PokitPlayer.app" ) && echo "[$(date -u +%T)] arm64 zip done" >> "$LOG"
-[ "$X64_OK" = "1" ]   && ( cd mac       && zip -ry -q ../PokitPlayer-1.1.3-x64-notarized.zip   "PokitPlayer.app" ) && echo "[$(date -u +%T)] x64 zip done" >> "$LOG"
+[ "$ARM64_OK" = "1" ] && ( cd mac-arm64 && zip -ry -q ../MaidenPlayer-1.1.3-arm64-notarized.zip "MaidenPlayer.app" ) && echo "[$(date -u +%T)] arm64 zip done" >> "$LOG"
+[ "$X64_OK" = "1" ]   && ( cd mac       && zip -ry -q ../MaidenPlayer-1.1.3-x64-notarized.zip   "MaidenPlayer.app" ) && echo "[$(date -u +%T)] x64 zip done" >> "$LOG"
 echo "[$(date -u +%T)] watcher FINISHED arm64=$ARM64_OK x64=$X64_OK" >> "$LOG"
 touch /tmp/watch_notarize.done

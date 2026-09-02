@@ -296,8 +296,8 @@ function buildMenu() {
           click: () => {
             dialog.showMessageBox(mainWindow, {
               type: 'info',
-              title: 'About PokitPlayer',
-              message: `PokitPlayer v${app.getVersion()}`,
+              title: 'About MaidenPlayer',
+              message: `MaidenPlayer v${app.getVersion()}`,
               detail:
                 'A professional cross-platform video player.\n' +
                 'Supports ProRes, DNxHD/DNxHR, image sequences, and more.\n' +
@@ -690,7 +690,7 @@ autoUpdater.on('update-downloaded', (info) => {
     .showMessageBox(mainWindow, {
       type: 'info',
       title: 'Update Ready',
-      message: `PokitPlayer ${info.version} has been downloaded.`,
+      message: `MaidenPlayer ${info.version} has been downloaded.`,
       detail: 'Restart now to install it, or it will install automatically on quit.',
       buttons: ['Restart Now', 'Later'],
       defaultId: 0,
@@ -714,7 +714,7 @@ autoUpdater.on('update-not-available', () => {
   dialog.showMessageBox(mainWindow, {
     type: 'info',
     title: 'No Updates Available',
-    message: `PokitPlayer ${app.getVersion()} is the latest version.`,
+    message: `MaidenPlayer ${app.getVersion()} is the latest version.`,
     buttons: ['OK'],
   });
 });
@@ -726,7 +726,7 @@ autoUpdater.on('update-available', (info) => {
   dialog.showMessageBox(mainWindow, {
     type: 'info',
     title: 'Update Available',
-    message: `PokitPlayer ${info.version} is available.`,
+    message: `MaidenPlayer ${info.version} is available.`,
     detail: 'It is downloading now. You will be prompted to restart when it is ready.',
     buttons: ['OK'],
   });
@@ -756,10 +756,10 @@ function checkForUpdates(isManual) {
 // App lifecycle
 // ──────────────────────────────────────────────
 
-app.setAsDefaultProtocolClient('pokitplayer');
+app.setAsDefaultProtocolClient('maidenplayer');
 
 if (process.platform === 'win32') {
-  app.setAppUserModelId('com.pokitplayer.app');
+  app.setAppUserModelId('com.maidenplayer.app');
 }
 
 app.whenReady().then(() => {

@@ -1,4 +1,4 @@
-# PokitPlayer — Replit Development Guide
+# MaidenPlayer — Replit Development Guide
 
 > **Version**: 1.1.3  
 > **Engine**: Electron 28 + FFmpeg streaming decode (fMP4 → MediaSource Extensions)  
@@ -12,7 +12,7 @@
 
 1. Go to [replit.com](https://replit.com) and click **Create Repl**
 2. Choose **Import from ZIP** (or push to GitHub first and import from repo)
-3. Upload `PokitPlayer-Replit.zip`
+3. Upload `MaidenPlayer-Replit.zip`
 4. Replit will auto-detect the `.replit` and `replit.nix` configurations
 
 ### 2. Install Dependencies
@@ -80,7 +80,7 @@ For Electron apps, Replit may show the app in its **Output** tab via VNC. If it 
 ## 📁 Project Structure
 
 ```
-PokitPlayer/
+MaidenPlayer/
 ├── .replit              # Replit run configuration
 ├── replit.nix           # Nix dependencies (FFmpeg, Electron libs, etc.)
 ├── .gitignore           # Git ignore rules
@@ -135,7 +135,7 @@ PokitPlayer/
 
 ### The Problem
 
-PokitPlayer bundles **platform-specific FFmpeg binaries** in `src/bin/` for distribution builds:
+MaidenPlayer bundles **platform-specific FFmpeg binaries** in `src/bin/` for distribution builds:
 
 - `ffmpeg-darwin` — macOS Intel (x64) — 76 MB
 - `ffmpeg-darwin-arm64` — macOS Apple Silicon — 44 MB  
@@ -299,4 +299,4 @@ Replit can only build **Linux** targets. For macOS/Windows:
 
 ---
 
-*Last updated: June 2026 — PokitPlayer v1.1.3*
+*Last updated: June 2026 — MaidenPlayer v1.1.3*

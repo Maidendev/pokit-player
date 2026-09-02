@@ -1,5 +1,5 @@
 /**
- * PokitPlayer — Stream Decoder v1.1.0
+ * MaidenPlayer — Stream Decoder v1.1.0
  *
  * Decodes ProRes/DNxHD/DNxHR (and other non-native codecs) in real-time
  * by spawning ffmpeg to transcode to fragmented MP4 (fMP4) and streaming

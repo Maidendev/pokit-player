@@ -1,4 +1,4 @@
-# PokitPlayer
+# MaidenPlayer
 
 A professional, cross-platform desktop video player built with Electron. Features a sleek DaVinci Resolve-inspired dark interface, QuickTime-style keyboard shortcuts, frame-accurate timecode display, and file information viewer.
 

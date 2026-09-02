@@ -1,5 +1,5 @@
 /**
- * PokitPlayer — Transcoder Module v1.1.3
+ * MaidenPlayer — Transcoder Module v1.1.3
  *
  * Uses bundled ffmpeg to:
  *  1. Probe files for codec info (ProRes, DNxHD/DNxHR, etc.)
@@ -114,7 +114,7 @@ const FFMPEG = getFfmpegPath();
 const tempFiles = new Set();
 
 function makeTempPath(suffix = '.mp4') {
-  const name = 'pokitplayer_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8) + suffix;
+  const name = 'maidenplayer_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8) + suffix;
   const p = path.join(os.tmpdir(), name);
   tempFiles.add(p);
   return p;

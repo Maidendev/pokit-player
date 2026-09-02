@@ -1,5 +1,5 @@
 /**
- * PokitPlayer — Loudness Analysis Module
+ * MaidenPlayer — Loudness Analysis Module
  *
  * Program loudness to ITU-R BS.1770 via FFmpeg's ebur128 filter, with
  * pass/fail against the delivery targets our specs care about (EBU R128 and

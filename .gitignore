@@ -15,8 +15,7 @@ build/
 
 # ── Platform-specific FFmpeg binaries ──
 # (Replit uses system ffmpeg from Nix instead)
-src/bin/ffmpeg-darwin
-src/bin/ffmpeg-darwin-arm64
+src/bin/ffmpeg-darwin*
 src/bin/ffmpeg.exe
 
 # ── Signing & certificates ──
@@ -26,6 +25,9 @@ src/bin/ffmpeg.exe
 *.pem
 *.key
 *.provisionprofile
+
+# ── Local icon backup from the PokitPlayer -> MaidenPlayer rebrand ──
+.icon-backup-pokit/
 
 # ── macOS artifacts ──
 .DS_Store

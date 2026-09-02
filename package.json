@@ -1,7 +1,7 @@
 {
-  "name": "pokitplayer",
+  "name": "maidenplayer",
   "version": "1.2.7",
-  "description": "PokitPlayer — A professional cross-platform video player with instant streaming playback for ProRes/DNxHD/DNxHR, QuickTime shortcuts, timecode display, and file info viewer.",
+  "description": "MaidenPlayer — A professional cross-platform video player with instant streaming playback for ProRes/DNxHD/DNxHR, QuickTime shortcuts, timecode display, and file info viewer.",
   "main": "src/main.js",
   "repository": {
     "type": "git",
@@ -27,14 +27,16 @@
     "pack": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --dir"
   },
   "build": {
-    "appId": "com.pokitplayer.app",
-    "productName": "PokitPlayer",
-    "copyright": "Copyright © 2026 PokitPlayer Contributors",
+    "appId": "com.maidenplayer.app",
+    "productName": "MaidenPlayer",
+    "copyright": "Copyright © 2026 MaidenPlayer Contributors",
     "files": [
       "src/**/*",
       "node_modules/**/*",
       "!src/bin/README.md",
-      "!src/assets/icon.icns"
+      "!src/assets/icon.icns",
+      "!FOOTAGE",
+      "!FOOTAGE/**/*"
     ],
     "asarUnpack": [
       "node_modules/ffmpeg-static/**",
@@ -68,12 +70,12 @@
         }
       ],
       "icon": "src/assets/icon.ico",
-      "publisherName": "PokitPlayer",
+      "publisherName": "MaidenPlayer",
       "verifyUpdateCodeSignature": false,
       "requestedExecutionLevel": "asInvoker",
       "extraFiles": [],
       "files": [
-        "!src/bin/ffmpeg-darwin",
+        "!src/bin/ffmpeg-darwin*",
         "!node_modules/ffprobe-static/bin/darwin/**",
         "!node_modules/ffprobe-static/bin/linux/**",
         "!node_modules/ffprobe-static/bin/win32/ia32/**"
@@ -88,7 +90,7 @@
       "installerHeaderIcon": "src/assets/icon.ico",
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "PokitPlayer",
+      "shortcutName": "MaidenPlayer",
       "menuCategory": "Video",
       "deleteAppDataOnUninstall": true,
       "displayLanguageSelector": false
@@ -112,15 +114,12 @@
       ],
       "icon": "src/assets/icon.icns",
       "category": "public.app-category.video",
+      "artifactName": "${productName}-${version}-${arch}-mac.${ext}",
       "darkModeSupport": true,
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
       "entitlements": "entitlements.mac.plist",
       "entitlementsInherit": "entitlements.mac.inherit.plist",
-      "signIgnore": [
-        "src/bin/ffmpeg-darwin",
-        "src/bin/ffmpeg-darwin-arm64"
-      ],
       "type": "distribution",
       "notarize": false,
       "files": [
@@ -131,7 +130,8 @@
     },
     "afterSign": "scripts/notarize.js",
     "dmg": {
-      "title": "PokitPlayer",
+      "title": "MaidenPlayer ${version} (${arch})",
+      "artifactName": "${productName}-${version}-${arch}.${ext}",
       "icon": "src/assets/icon.icns",
       "contents": [
         {
@@ -157,6 +157,7 @@
       ],
       "icon": "src/assets/icon.png",
       "files": [
+        "!src/bin/ffmpeg-darwin*",
         "!node_modules/ffprobe-static/bin/win32/**",
         "!node_modules/ffprobe-static/bin/darwin/**",
         "!node_modules/ffprobe-static/bin/linux/ia32/**"
@@ -290,9 +291,9 @@
     ],
     "protocols": [
       {
-        "name": "PokitPlayer Video",
+        "name": "MaidenPlayer Video",
         "schemes": [
-          "pokitplayer"
+          "maidenplayer"
         ]
       }
     ]
@@ -303,9 +304,9 @@
     "electron",
     "timecode",
     "professional",
-    "pokitplayer"
+    "maidenplayer"
   ],
-  "author": "PokitPlayer Contributors",
+  "author": "MaidenPlayer Contributors",
   "license": "MIT",
   "devDependencies": {
     "@electron/notarize": "^2.3.2",

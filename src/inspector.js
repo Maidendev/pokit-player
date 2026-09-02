@@ -1,5 +1,5 @@
 /**
- * PokitPlayer — Media Inspector Module
+ * MaidenPlayer — Media Inspector Module
  *
  * Deep media inspection via ffprobe JSON, feeding the "Check It" panel.
  * This is the structured-metadata substrate the QC features build on:

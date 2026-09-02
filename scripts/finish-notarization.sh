@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================
 # finish-notarization.sh
-# Completes notarization for PokitPlayer v1.1.3 once Apple's
+# Completes notarization for MaidenPlayer v1.1.3 once Apple's
 # Notary service finishes processing the already-submitted apps.
 #
 # WHY THIS EXISTS:
@@ -47,7 +47,7 @@ finish(){  # $1=id $2=appPath $3=label $4=zipName
   esac
 }
 
-finish "$ARM64_ID" "dist/mac-arm64/PokitPlayer.app" "arm64" "PokitPlayer-1.1.3-arm64-notarized.zip"
-finish "$X64_ID"   "dist/mac/PokitPlayer.app"        "x64"   "PokitPlayer-1.1.3-x64-notarized.zip"
+finish "$ARM64_ID" "dist/mac-arm64/MaidenPlayer.app" "arm64" "MaidenPlayer-1.1.3-arm64-notarized.zip"
+finish "$X64_ID"   "dist/mac/MaidenPlayer.app"        "x64"   "MaidenPlayer-1.1.3-x64-notarized.zip"
 echo "Done. Final artifacts (if accepted):"
-ls -lh dist/PokitPlayer-1.1.3-*-notarized.zip 2>/dev/null || echo "  (none yet)"
+ls -lh dist/MaidenPlayer-1.1.3-*-notarized.zip 2>/dev/null || echo "  (none yet)"

@@ -1,11 +1,11 @@
 #!/bin/bash
 # ─────────────────────────────────────────────────────────
-# PokitPlayer — Verify macOS Code Signing & Notarization
+# MaidenPlayer — Verify macOS Code Signing & Notarization
 #
 # Usage:
 #   ./scripts/verify-signing.sh [path-to-app]
 #
-# If no path is given, looks for PokitPlayer.app in dist/
+# If no path is given, looks for MaidenPlayer.app in dist/
 # ─────────────────────────────────────────────────────────
 
 set -e
@@ -21,19 +21,19 @@ APP_PATH="${1:-}"
 
 # Auto-detect .app in dist/
 if [ -z "$APP_PATH" ]; then
-  if [ -d "dist/mac-arm64/PokitPlayer.app" ]; then
-    APP_PATH="dist/mac-arm64/PokitPlayer.app"
-  elif [ -d "dist/mac/PokitPlayer.app" ]; then
-    APP_PATH="dist/mac/PokitPlayer.app"
+  if [ -d "dist/mac-arm64/MaidenPlayer.app" ]; then
+    APP_PATH="dist/mac-arm64/MaidenPlayer.app"
+  elif [ -d "dist/mac/MaidenPlayer.app" ]; then
+    APP_PATH="dist/mac/MaidenPlayer.app"
   else
     echo -e "${RED}Error: No .app found. Provide path as argument or build first.${NC}"
-    echo "Usage: $0 /path/to/PokitPlayer.app"
+    echo "Usage: $0 /path/to/MaidenPlayer.app"
     exit 1
   fi
 fi
 
 echo -e "${CYAN}════════════════════════════════════════════════${NC}"
-echo -e "${CYAN}  PokitPlayer — Signing Verification Report${NC}"
+echo -e "${CYAN}  MaidenPlayer — Signing Verification Report${NC}"
 echo -e "${CYAN}════════════════════════════════════════════════${NC}"
 echo ""
 echo -e "App: ${YELLOW}${APP_PATH}${NC}"
@@ -96,7 +96,7 @@ echo ""
 # ─── 7. Bundled Binaries Check ──────────────
 echo -e "${CYAN}7. Bundled Binary Signatures${NC}"
 echo "─────────────────────────────────────────────"
-HELPERS=$(find "$APP_PATH" -name "*.app" -o -name "PokitPlayer" -path "*/MacOS/*" | head -10)
+HELPERS=$(find "$APP_PATH" -name "*.app" -o -name "MaidenPlayer" -path "*/MacOS/*" | head -10)
 for helper in $HELPERS; do
   echo -n "  $(basename "$helper"): "
   if codesign --verify --strict "$helper" 2>/dev/null; then

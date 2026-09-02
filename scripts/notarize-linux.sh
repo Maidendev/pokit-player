@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================
-# notarize-linux.sh — Sign + Notarize + Staple PokitPlayer
+# notarize-linux.sh — Sign + Notarize + Staple MaidenPlayer
 # entirely on Linux using rcodesign (no macOS required).
 #
 # Apple's notarization from Linux REQUIRES an App Store Connect
@@ -26,7 +26,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 CERT="${CSC_LINK:-Certificates.p12}"
-CERT_PW="${CSC_KEY_PASSWORD:-Hunthart16}"
+# No default. The .p12 password is a secret and must come from the environment
+# or --cert-password; a literal default here ends up committed to the repo.
+CERT_PW="${CSC_KEY_PASSWORD:-}"
 ENTITLEMENTS="entitlements.mac.plist"
 ISSUER=""; KEY_ID=""; P8=""
 
@@ -47,6 +49,12 @@ if [[ -z "$ISSUER" || -z "$KEY_ID" || -z "$P8" ]]; then
   exit 1
 fi
 
+if [[ -z "$CERT_PW" ]]; then
+  echo "ERROR: certificate password not set."
+  echo "Pass --cert-password, or export CSC_KEY_PASSWORD."
+  exit 1
+fi
+
 command -v rcodesign >/dev/null || { echo "rcodesign not found in PATH"; exit 1; }
 
 # 1. Encode the API key into a single JSON file rcodesign understands
@@ -55,7 +63,7 @@ echo "==> Encoding App Store Connect API key..."
 rcodesign encode-app-store-connect-api-key \
   "$ISSUER" "$KEY_ID" "$P8" > "$API_JSON"
 
-APPS=( "dist/mac-arm64/PokitPlayer.app" "dist/mac/PokitPlayer.app" )
+APPS=( "dist/mac-arm64/MaidenPlayer.app" "dist/mac/MaidenPlayer.app" )
 
 for APP in "${APPS[@]}"; do
   [[ -d "$APP" ]] || { echo "Skip (missing): $APP"; continue; }
@@ -87,12 +95,12 @@ rm -f "$API_JSON"
 # 4. Re-zip the stapled apps for distribution
 echo ""
 echo "==> Re-packaging notarized apps into distributable ZIPs..."
-( cd dist/mac-arm64 && zip -ry -q ../PokitPlayer-1.1.3-arm64-notarized.zip "PokitPlayer.app" )
-( cd dist/mac       && zip -ry -q ../PokitPlayer-1.1.3-x64-notarized.zip   "PokitPlayer.app" )
+( cd dist/mac-arm64 && zip -ry -q ../MaidenPlayer-1.1.3-arm64-notarized.zip "MaidenPlayer.app" )
+( cd dist/mac       && zip -ry -q ../MaidenPlayer-1.1.3-x64-notarized.zip   "MaidenPlayer.app" )
 
 echo ""
 echo "ALL DONE. Notarized, stapled, distributable artifacts:"
-ls -lh dist/PokitPlayer-1.1.3-*-notarized.zip
+ls -lh dist/MaidenPlayer-1.1.3-*-notarized.zip
 echo ""
 echo "These ZIPs contain stapled .app bundles — they open on any Mac"
 echo "with no 'unidentified developer' warning, even offline."

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================
 # create-dmg-installers.sh
-# Creates professional DMG installers for PokitPlayer v1.1.3
+# Creates professional DMG installers for MaidenPlayer v1.1.3
 #
 # PREREQUISITES:
 #   - Apps must be notarized and stapled
@@ -14,8 +14,8 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 VERSION="1.1.3"
-ARM64_APP="dist/mac-arm64/PokitPlayer.app"
-X64_APP="dist/mac/PokitPlayer.app"
+ARM64_APP="dist/mac-arm64/MaidenPlayer.app"
+X64_APP="dist/mac/MaidenPlayer.app"
 ICON="src/assets/icon.icns"
 
 # Check if apps are stapled
@@ -43,8 +43,8 @@ check_stapled() {
 create_dmg() {
   local app="$1"
   local arch="$2"
-  local dmg_name="dist/PokitPlayer-${VERSION}-${arch}.dmg"
-  local vol_name="PokitPlayer ${VERSION}"
+  local dmg_name="dist/MaidenPlayer-${VERSION}-${arch}.dmg"
+  local vol_name="MaidenPlayer ${VERSION}"
   local temp_dir="dist/dmg-temp-${arch}"
   
   echo ""
@@ -80,8 +80,8 @@ create_dmg() {
   else
     echo "   ⚠️  genisoimage/mkisofs not found"
     echo "   Creating ZIP instead..."
-    ( cd "$temp_dir" && zip -ry -q "../PokitPlayer-${VERSION}-${arch}.zip" . )
-    echo "   ✅ Created: dist/PokitPlayer-${VERSION}-${arch}.zip"
+    ( cd "$temp_dir" && zip -ry -q "../MaidenPlayer-${VERSION}-${arch}.zip" . )
+    echo "   ✅ Created: dist/MaidenPlayer-${VERSION}-${arch}.zip"
   fi
   
   # Clean up temp
@@ -90,7 +90,7 @@ create_dmg() {
 
 # Check both apps
 echo "==================================================="
-echo "PokitPlayer DMG Installer Creation"
+echo "MaidenPlayer DMG Installer Creation"
 echo "==================================================="
 
 if ! check_stapled "$ARM64_APP" "Apple Silicon"; then
@@ -118,7 +118,7 @@ echo "✅ DMG Creation Complete!"
 echo "==================================================="
 echo ""
 echo "Final installers:"
-ls -lh dist/*.dmg 2>/dev/null || ls -lh dist/PokitPlayer-${VERSION}-*.zip
+ls -lh dist/*.dmg 2>/dev/null || ls -lh dist/MaidenPlayer-${VERSION}-*.zip
 echo ""
 echo "These DMGs are:"
 echo "  ✅ Code-signed with Developer ID"
@@ -126,5 +126,5 @@ echo "  ✅ Notarized by Apple"
 echo "  ✅ Stapled (works offline)"
 echo "  ✅ Ready for distribution"
 echo ""
-echo "Users can simply drag PokitPlayer.app to Applications"
+echo "Users can simply drag MaidenPlayer.app to Applications"
 echo "==================================================="

@@ -1,5 +1,5 @@
 /**
- * PokitPlayer — Renderer Process v1.1.3
+ * MaidenPlayer — Renderer Process v1.1.3
  * Handles video playback, UI, keyboard shortcuts, timecode,
  * ProRes/DNX streaming decode via MSE, and image sequence support.
  *
@@ -783,8 +783,8 @@
 
         // Show controls
         const fileName = filePath.split(/[\\/]/).pop();
-        titleText.textContent = fileName + ' — PokitPlayer';
-        document.title = fileName + ' — PokitPlayer';
+        titleText.textContent = fileName + ' — MaidenPlayer';
+        document.title = fileName + ' — MaidenPlayer';
         dropZone.classList.remove('visible');
         controlsBar.classList.remove('hidden');
         controlsBar.classList.add('visible');
@@ -883,8 +883,8 @@
 
     // Update title
     const fileName = displayName || filePath.split(/[\\/]/).pop();
-    titleText.textContent = fileName + ' — PokitPlayer';
-    document.title = fileName + ' — PokitPlayer';
+    titleText.textContent = fileName + ' — MaidenPlayer';
+    document.title = fileName + ' — MaidenPlayer';
 
     // Show controls
     dropZone.classList.remove('visible');
@@ -2596,6 +2596,6 @@
   // ─── Initial State ────────────────────────────────────
   updateVolumeIcon();
   updatePlayButton();
-  console.log('[Renderer] PokitPlayer v1.2.7 initialized');
+  console.log('[Renderer] MaidenPlayer v1.2.7 initialized');
 
 })();

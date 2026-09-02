@@ -46,6 +46,40 @@ jobs:
 
       - run: npm install
 
+      # ffmpeg-static installs exactly ONE binary — the arch of the machine it
+      # was installed on (see node_modules/ffmpeg-static/index.js). The macOS
+      # runner is arm64, but `--mac` produces BOTH an arm64 and an x64 DMG from
+      # that single install, so the Intel DMG would ship an arm64 ffmpeg and
+      # every transcode would fail on Intel hardware.
+      #
+      # Fetch both explicitly via ffmpeg-static's own npm_config_arch override
+      # (same download source as the dependency itself — no new supply chain)
+      # and drop them where transcoder.js already looks first:
+      # src/bin/ffmpeg-darwin-${process.arch}.
+      - name: Fetch both macOS ffmpeg architectures
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p src/bin
+          for arch in x64 arm64; do
+            echo "==> Fetching darwin/${arch} ffmpeg"
+            npm_config_platform=darwin npm_config_arch="$arch" \
+              npm rebuild ffmpeg-static --foreground-scripts
+            cp node_modules/ffmpeg-static/ffmpeg "src/bin/ffmpeg-darwin-${arch}"
+            chmod +x "src/bin/ffmpeg-darwin-${arch}"
+          done
+          # Verify each binary is really the arch it claims. A silent fallback
+          # to the host arch here is exactly the bug this step exists to stop.
+          for arch in x64 arm64; do
+            f="src/bin/ffmpeg-darwin-${arch}"
+            echo "--- $f"
+            file "$f"
+            expected="$arch"; [[ "$arch" == "x64" ]] && expected="x86_64"
+            file "$f" | grep -q "$expected" || {
+              echo "ERROR: $f is not $expected"; exit 1; }
+          done
+
       # Say plainly in the log whether this build will be signed. Without this
       # an unsigned build looks identical to a signed one until a user hits
       # the Gatekeeper warning.
@@ -109,6 +143,50 @@ jobs:
           # EEXIST on macOS (electron-userland/electron-builder#3179,
           # #7093, #6570). Forces real copies instead of hardlinks.
           USE_HARD_LINKS: false
+
+      # Prove BOTH Mac builds exist and that each one is genuinely the arch it
+      # is named for. Cross-arch mistakes here are invisible until an Intel
+      # user launches an arm64 binary, so assert it in CI instead.
+      - name: Verify Intel + Apple Silicon builds
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "=== dist ==="
+          ls -lh dist/*.dmg dist/*.zip dist/latest-mac.yml 2>/dev/null || true
+
+          fail=0
+          check() {  # <app path> <expected lipo arch> <label>
+            local app="$1" want="$2" label="$3"
+            if [[ ! -d "$app" ]]; then
+              echo "MISSING: $app ($label)"; fail=1; return
+            fi
+            local bin="$app/Contents/MacOS/MaidenPlayer"
+            echo "--- $label: $app"
+            echo "    app binary : $(lipo -archs "$bin")"
+            lipo -archs "$bin" | grep -qw "$want" || {
+              echo "    ERROR: expected $want"; fail=1; }
+            # The bundled ffmpeg must match too — this is the one that silently
+            # ships wrong and only fails at transcode time.
+            local ff
+            ff=$(find "$app" -name 'ffmpeg-darwin-*' -o -name 'ffmpeg' -type f 2>/dev/null | head -1)
+            if [[ -n "$ff" ]]; then
+              echo "    ffmpeg     : $(lipo -archs "$ff")  ($(basename "$ff"))"
+            fi
+            # Signature + notarization ticket. Only meaningful once secrets exist.
+            codesign -dv --verbose=2 "$app" 2>&1 | grep -E 'Authority|TeamIdentifier|flags' || true
+            spctl -a -vvv -t exec "$app" 2>&1 | head -3 || true
+          }
+
+          check "dist/mac/MaidenPlayer.app"       x86_64 "Intel (x64)"
+          check "dist/mac-arm64/MaidenPlayer.app" arm64  "Apple Silicon (arm64)"
+
+          for f in dist/MaidenPlayer-*-x64.dmg dist/MaidenPlayer-*-arm64.dmg; do
+            [[ -f "$f" ]] || { echo "MISSING DMG: $f"; fail=1; }
+          done
+
+          [[ "$fail" == "0" ]] || { echo "Mac build verification FAILED"; exit 1; }
+          echo "Both Mac builds verified."
 
       # Tag builds publish installers straight to the GitHub Release (above) —
       # that's the real deliverable and doesn't count against Actions storage
