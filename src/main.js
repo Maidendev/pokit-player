@@ -5,6 +5,7 @@ const transcoder = require('./transcoder');
 const inspector = require('./inspector');
 const loudness = require('./loudness');
 const captions = require('./captions');
+const encoder = require('./encoder');
 const { StreamDecoder } = require('./stream-decoder');
 const { autoUpdater } = require('electron-updater');
 
@@ -302,8 +303,14 @@ function buildMenu() {
                 'A professional cross-platform video player.\n' +
                 'Supports ProRes, DNxHD/DNxHR, image sequences, and more.\n' +
                 'Instant streaming playback — no transcode wait.\n' +
-                'Source timecode display from embedded metadata.\n' +
-                'Built with Electron + ffmpeg.\n\nMIT License',
+                'Source timecode display from embedded metadata.\n\n' +
+                'PokitPlayer is MIT licensed.\n' +
+                'Includes Electron (MIT) and FFmpeg, used unmodified as a\n' +
+                'separate executable under the LGPL v3. FFmpeg\'s licence text\n' +
+                'ships alongside the binary; its source is available from\n' +
+                'ffmpeg.org, and the bundled build may be replaced with a\n' +
+                'compatible one.\n' +
+                'Full component list: docs/oss/PLAYER-COMPONENTS.md',
             });
           },
         },
@@ -578,6 +585,18 @@ ipcMain.handle('render-image-sequence', async (_event, seqInfo, fps) => {
 // ──────────────────────────────────────────────
 // Stream Decode IPC Handlers (v1.1.0)
 // ──────────────────────────────────────────────
+
+// The renderer needs the codec string BEFORE it opens a MediaSource, and the
+// answer depends on which encoder survived the runtime probe on this machine
+// (H.264 on almost everything, VP9 only where no H.264 encoder is usable).
+ipcMain.handle('get-mse-codec', async (_event, hasAudio) => {
+  try {
+    return encoder.mseCodecString(transcoder.FFMPEG, !!hasAudio);
+  } catch (err) {
+    console.error('[Main] get-mse-codec failed:', err.message);
+    return null;
+  }
+});
 
 ipcMain.handle('start-stream', async (_event, filePath, seekTime = 0) => {
   console.log('[Main] IPC: start-stream', filePath, 'seek:', seekTime);

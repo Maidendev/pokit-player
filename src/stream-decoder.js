@@ -18,6 +18,7 @@
 
 const { spawn } = require('child_process');
 const { FFMPEG } = require('./transcoder');
+const { videoEncoderArgs } = require('./encoder');
 
 class StreamDecoder {
   constructor() {
@@ -88,15 +89,12 @@ class StreamDecoder {
     // Input
     args.push('-i', filePath);
 
-    // Video encoding: H.264 ultrafast for speed, High profile for MSE compat
+    // Video encoding. The encoder is chosen at runtime rather than hardcoded:
+    // hardware H.264 where the machine has it, OpenH264 otherwise. See
+    // encoder.js for why (short version: x264 is GPL and used to make the
+    // whole bundled ffmpeg GPL-3).
     args.push(
-      '-c:v', 'libx264',
-      '-preset', 'ultrafast',
-      '-tune', 'zerolatency',
-      '-crf', '23',
-      '-pix_fmt', 'yuv420p',
-      '-profile:v', 'high',
-      '-level', '4.1',
+      ...videoEncoderArgs(FFMPEG, 'realtime'),
       // Ensure even dimensions
       '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2'
     );

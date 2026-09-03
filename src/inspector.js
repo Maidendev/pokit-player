@@ -10,9 +10,14 @@
  * That parse cannot see clean aperture, color metadata, channel layouts or
  * side data, so inspection gets a real ffprobe instead of extending the regex.
  *
- * ffprobe is resolved the same way transcoder.js resolves ffmpeg: a bundled
- * platform binary in src/bin first, then the ffprobe-static npm package, then
- * whatever is on PATH.
+ * ffprobe is resolved the same way transcoder.js resolves ffmpeg: our bundled,
+ * licence-verified platform binary in src/bin first, then whatever is on PATH.
+ *
+ * The ffprobe-static npm package is deliberately gone. It declared MIT while
+ * vendoring --enable-gpl --enable-version3 FFmpeg builds, so every automated
+ * licence scan reported it clean. It also pinned ffprobe at 4.0.2 (2018)
+ * against a much newer ffmpeg — the version mismatch recorded in PINNED.md.
+ * Both problems disappear now that ffmpeg and ffprobe come from one build.
  */
 
 const path = require('path');
@@ -35,28 +40,20 @@ function getFfprobePath() {
   const candidates = [];
 
   if (platform === 'darwin') {
-    // Match transcoder.js: arch-specific binary first, then generic.
-    candidates.push(path.join(binDirUnpacked, 'ffprobe-darwin-' + process.arch));
-    candidates.push(path.join(binDir, 'ffprobe-darwin-' + process.arch));
-    candidates.push(path.join(binDirUnpacked, 'ffprobe-darwin'));
-    candidates.push(path.join(binDir, 'ffprobe-darwin'));
+    // Match transcoder.js: arch-specific only, no generic darwin fallback.
+    const archName = 'ffprobe-darwin-' + process.arch;
+    candidates.push(path.join(binDirUnpacked, archName));
+    candidates.push(path.join(binDir, archName));
+    if (process.resourcesPath) {
+      candidates.push(path.join(process.resourcesPath, 'bin', archName));
+    }
   } else {
     candidates.push(path.join(binDirUnpacked, exe));
     candidates.push(path.join(binDir, exe));
-  }
-  if (process.resourcesPath) {
-    candidates.push(path.join(process.resourcesPath, 'bin', exe));
-  }
-
-  try {
-    let npmPath = require('ffprobe-static').path;
-    if (npmPath) {
-      if (npmPath.includes('app.asar')) {
-        npmPath = npmPath.replace('app.asar', 'app.asar.unpacked');
-      }
-      candidates.push(npmPath);
+    if (process.resourcesPath) {
+      candidates.push(path.join(process.resourcesPath, 'bin', exe));
     }
-  } catch (_) { /* not installed */ }
+  }
 
   for (const fp of candidates) {
     try {

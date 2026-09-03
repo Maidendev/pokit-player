@@ -161,27 +161,26 @@ The app's `stream-decoder.js` already has a fallback chain for finding FFmpeg:
 
 ### For Production Builds
 
-When you're ready to build distributable installers, you'll need the platform binaries:
+Binaries are fetched or built by script — never downloaded by hand:
 
 ```bash
-# Download and place platform binaries (run locally, not on Replit)
-mkdir -p src/bin
-
-# macOS Intel
-curl -L -o src/bin/ffmpeg-darwin \
-  "https://evermeet.cx/ffmpeg/getrelease/ffmpeg/zip"
-
-# macOS ARM
-curl -L -o src/bin/ffmpeg-darwin-arm64 \
-  "https://evermeet.cx/ffmpeg/getrelease/ffmpeg/zip?type=arm64"
-
-# Windows
-curl -L -o src/bin/ffmpeg.exe \
-  "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
-# (extract ffmpeg.exe from the zip)
-
-chmod +x src/bin/ffmpeg-darwin src/bin/ffmpeg-darwin-arm64
+npm run ffmpeg:fetch              # Windows / Linux: pinned LGPL build, SHA-256 verified
+./scripts/build-ffmpeg-macos.sh   # macOS: compiled from pinned source (run on a Mac)
+npm run ffmpeg:verify             # confirm nothing GPL or non-distributable got in
 ```
+
+`npm install` runs the fetch automatically.
+
+> **Do not download an FFmpeg build yourself.** This section used to tell you to
+> pull binaries from evermeet.cx and gyan.dev. Both of those are **GPL** builds —
+> they enable x264 and x265, which force FFmpeg's `--enable-gpl` — and following
+> those instructions is how GPL-3 binaries ended up in shipped installers. The
+> macOS arm64 binary in use before this change was worse still: it carried
+> `--enable-nonfree` and could not lawfully be redistributed at all.
+>
+> `npm run ffmpeg:verify` reads the build configuration compiled into each binary
+> and fails on any GPL or non-distributable flag. It runs on `prebuild` and in CI.
+> See `src/bin/README.md` and `docs/oss/` for the detail.
 
 ---
 

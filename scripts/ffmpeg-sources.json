@@ -1,0 +1,73 @@
+{
+  "$comment": [
+    "Pinned sources for the LGPL FFmpeg and ffprobe binaries PokitPlayer ships.",
+    "Replaces the ffmpeg-static / ffprobe-static npm packages, which downloaded GPL-3 builds (and, on macOS arm64, a build flagged --enable-nonfree that could not lawfully be redistributed at all).",
+    "Windows and Linux use BtbN's official LGPL variants - the '-lgpl' asset, not the default GPL one. Verified 2026-09-03: no --enable-gpl, no --enable-nonfree, and x264/x265/xvid explicitly disabled.",
+    "macOS has no published LGPL build from any reputable source (Homebrew, evermeet and osxexperts all ship GPL), so it is compiled from pinned FFmpeg source in CI by scripts/build-ffmpeg-macos.sh.",
+    "Every binary, however acquired, must pass scripts/verify-ffmpeg-license.js before it can be packaged. That gate - not this file - is the actual guarantee.",
+    "ON CHECKSUM DRIFT: BtbN publishes to a rolling 'latest' tag, so these hashes will eventually stop matching when upstream rebuilds. That is a deliberate fail-closed design: the fetch aborts rather than silently pulling an unreviewed binary. Re-pin with `npm run ffmpeg:fetch -- --update-checksums` after confirming the new build still passes the licence gate. For fully reproducible builds, mirror these artefacts to storage we control and set FFMPEG_MIRROR_BASE."
+  ],
+  "license": {
+    "expected": "LGPL-3.0-or-later",
+    "forbiddenFlags": [
+      "--enable-gpl",
+      "--enable-nonfree",
+      "--enable-libx264",
+      "--enable-libx265",
+      "--enable-libxvid",
+      "--enable-librubberband",
+      "--enable-libvidstab",
+      "--enable-frei0r",
+      "--enable-libxavs",
+      "--enable-libsvtav1-gpl"
+    ]
+  },
+  "platforms": {
+    "win32-x64": {
+      "method": "download",
+      "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-lgpl.zip",
+      "sha256": "c7e6a782b62e74ffb045955dc8ae29a615621a9f3dd145172c0b886ca01bf218",
+      "archive": "zip",
+      "verifiedOn": "2026-09-03",
+      "extract": {
+        "ffmpeg.exe": "ffmpeg-master-latest-win64-lgpl/bin/ffmpeg.exe",
+        "ffprobe.exe": "ffmpeg-master-latest-win64-lgpl/bin/ffprobe.exe"
+      },
+      "noticeFiles": {
+        "FFMPEG-LICENSE.txt": "ffmpeg-master-latest-win64-lgpl/LICENSE.txt"
+      }
+    },
+    "linux-x64": {
+      "method": "download",
+      "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-lgpl.tar.xz",
+      "sha256": "5523b96d2aaa918597dc0e43c5e2e18a6a576fb4ee7c506c117ce3447351d6d2",
+      "archive": "tar.xz",
+      "verifiedOn": "2026-09-03",
+      "extract": {
+        "ffmpeg": "ffmpeg-master-latest-linux64-lgpl/bin/ffmpeg",
+        "ffprobe": "ffmpeg-master-latest-linux64-lgpl/bin/ffprobe"
+      },
+      "noticeFiles": {
+        "FFMPEG-LICENSE.txt": "ffmpeg-master-latest-linux64-lgpl/LICENSE.txt"
+      }
+    },
+    "darwin-x64": {
+      "method": "build",
+      "script": "scripts/build-ffmpeg-macos.sh",
+      "produces": ["ffmpeg-darwin-x64", "ffprobe-darwin-x64"],
+      "$comment": "Built natively on an x64 macOS runner. Do NOT cross-build from arm64 - the previous arrangement shipped an arm64 binary inside the Intel DMG, which could not execute at all on an Intel Mac."
+    },
+    "darwin-arm64": {
+      "method": "build",
+      "script": "scripts/build-ffmpeg-macos.sh",
+      "produces": ["ffmpeg-darwin-arm64", "ffprobe-darwin-arm64"],
+      "$comment": "Built natively on an arm64 macOS runner."
+    }
+  },
+  "source": {
+    "$comment": "Used by the macOS build. The tarball SHA-256 is pinned for supply-chain integrity; it is separate from the licence guarantee, which comes from our own configure line plus the verify gate. If sha256 is null the build script prints the computed hash and fails, so a value is recorded deliberately rather than trusted blindly on first run.",
+    "version": "7.1.1",
+    "url": "https://ffmpeg.org/releases/ffmpeg-7.1.1.tar.xz",
+    "sha256": null
+  }
+}

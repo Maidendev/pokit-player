@@ -8,17 +8,24 @@
  *
  * Temporary files are placed in the OS temp directory and cleaned on exit.
  *
- * IMPORTANT: ffmpeg-static npm only installs the binary for the BUILD platform.
- * We bundle platform-specific binaries in src/bin/ for cross-platform support:
- *   - src/bin/ffmpeg.exe     (Windows x64)
- *   - src/bin/ffmpeg-darwin  (macOS x64)
- *   - node_modules/ffmpeg-static/ffmpeg (Linux x64, from npm)
+ * BINARIES: LGPL ffmpeg/ffprobe builds live in src/bin/, put there by
+ * `npm run ffmpeg:fetch` (Windows/Linux) or scripts/build-ffmpeg-macos.sh
+ * (macOS). They are never taken from an npm package: the old ffmpeg-static /
+ * ffprobe-static route resolved its download by host architecture at install
+ * time, which shipped GPL-3 builds and, on macOS arm64, one flagged
+ * --enable-nonfree that could not lawfully be redistributed at all.
+ *
+ *   - src/bin/ffmpeg.exe            (Windows x64)
+ *   - src/bin/ffmpeg-darwin-x64     (macOS Intel)
+ *   - src/bin/ffmpeg-darwin-arm64   (macOS Apple Silicon)
+ *   - src/bin/ffmpeg                (Linux x64)
  */
 
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { spawn } = require('child_process');
+const { videoEncoderArgs } = require('./encoder');
 
 // ---------------------------------------------------------------------------
 // ffmpeg path – works both in dev and in an asar-packed Electron build
@@ -29,9 +36,12 @@ function getFfmpegPath() {
   console.log('[Transcoder] Platform:', platform);
 
   // --- Strategy ---
-  // 1. Check for our bundled platform-specific binary in src/bin/ (or extraResources)
-  // 2. Fall back to ffmpeg-static npm package (only works for build platform)
-  // 3. Fall back to system PATH ffmpeg
+  // 1. Our bundled, licence-verified binary in src/bin/ (or extraResources)
+  // 2. System PATH ffmpeg — development convenience only
+  //
+  // There is deliberately no npm-package fallback. A binary we did not fetch
+  // is a binary whose licence we have not verified, and that is exactly how
+  // the GPL-3 and --enable-nonfree builds got into shipped installers.
 
   let candidates = [];
 
@@ -51,35 +61,21 @@ function getFfmpegPath() {
       candidates.push(path.join(process.resourcesPath, 'bin', 'ffmpeg.exe'));
     }
   } else if (platform === 'darwin') {
-    // Check arch-specific binary first (arm64 vs x64)
-    const arch = process.arch; // 'arm64' or 'x64'
-    const archBinaryName = 'ffmpeg-darwin-' + arch;
+    // Arch-specific only. There is no generic 'ffmpeg-darwin' fallback any
+    // more: that name is what let an arm64 binary sit inside the Intel DMG
+    // and fail to execute on an Intel Mac. Each architecture now gets its own
+    // natively-built binary, or none.
+    const archBinaryName = 'ffmpeg-darwin-' + process.arch; // 'arm64' | 'x64'
     candidates.push(path.join(binDirUnpacked, archBinaryName));
     candidates.push(path.join(binDir, archBinaryName));
-    // Then generic darwin binary
-    candidates.push(path.join(binDirUnpacked, 'ffmpeg-darwin'));
-    candidates.push(path.join(binDir, 'ffmpeg-darwin'));
     if (process.resourcesPath) {
       candidates.push(path.join(process.resourcesPath, 'bin', archBinaryName));
-      candidates.push(path.join(process.resourcesPath, 'bin', 'ffmpeg-darwin'));
     }
   } else {
     // Linux - also check our bin dir
     candidates.push(path.join(binDirUnpacked, 'ffmpeg'));
     candidates.push(path.join(binDir, 'ffmpeg'));
   }
-
-  // ffmpeg-static npm path (works for the platform the app was built on)
-  try {
-    let npmPath = require('ffmpeg-static');
-    if (npmPath) {
-      // Handle asar packing
-      if (npmPath.includes('app.asar')) {
-        npmPath = npmPath.replace('app.asar', 'app.asar.unpacked');
-      }
-      candidates.push(npmPath);
-    }
-  } catch (_) { /* not installed */ }
 
   // System PATH fallback
   candidates.push(platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg');
@@ -513,10 +509,7 @@ function transcodeToH264(filePath, probeInfo, onProgress) {
     const args = [
       '-y',
       '-i', filePath,
-      '-c:v', 'libx264',
-      '-preset', 'fast',
-      '-crf', '18',
-      '-pix_fmt', 'yuv420p',
+      ...videoEncoderArgs(FFMPEG, 'quality'),
       // Preserve resolution, ensure even dimensions
       '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
       // Audio → AAC for broad compatibility
@@ -669,10 +662,7 @@ function renderImageSequence(seqInfo, fps, onProgress) {
       '-framerate', String(fps),
       '-start_number', String(seqInfo.startFrame),
       '-i', seqInfo.pattern,
-      '-c:v', 'libx264',
-      '-preset', 'fast',
-      '-crf', '18',
-      '-pix_fmt', 'yuv420p',
+      ...videoEncoderArgs(FFMPEG, 'quality'),
       '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
       '-movflags', '+faststart',
       outputPath,

@@ -13,11 +13,19 @@ build/
 *.snap
 *.blockmap
 
-# ── Platform-specific FFmpeg binaries ──
-# (Replit uses system ffmpeg from Nix instead)
-src/bin/ffmpeg-darwin
-src/bin/ffmpeg-darwin-arm64
+# ── Platform FFmpeg binaries ──
+# Fetched by `npm run ffmpeg:fetch` (Windows/Linux) or built by
+# scripts/build-ffmpeg-macos.sh. Never committed — they are large, and the
+# pinned URL + checksum + licence gate is the record of what they are.
+src/bin/ffmpeg
+src/bin/ffprobe
 src/bin/ffmpeg.exe
+src/bin/ffprobe.exe
+src/bin/ffmpeg-darwin-*
+src/bin/ffprobe-darwin-*
+src/bin/FFMPEG-LICENSE.txt
+.ffmpeg-cache/
+.ffmpeg-build/
 
 # ── Signing & certificates ──
 *.p12

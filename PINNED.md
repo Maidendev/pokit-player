@@ -113,9 +113,14 @@ R128 pass/fail.
 
 ## §11 / §12 — Edit Mode, Export/Rewrap, Audio Editing, Apple Packages
 
-**Why pinned:** Not architecturally blocked — `transcoder.js` already drives fluent-ffmpeg
-and could take an export dialog. Pinned purely as scope. This is the most tractable of the
-pinned items and is the natural next thing to build.
+**Why pinned:** Not architecturally blocked — `transcoder.js` already builds and spawns
+ffmpeg command lines directly and could take an export dialog. Pinned purely as scope. This
+is the most tractable of the pinned items and is the natural next thing to build.
+
+> Correction (2026-09-03): this section previously said `transcoder.js` drives
+> `fluent-ffmpeg`. It does not, and never did — it uses `child_process.spawn` directly.
+> `fluent-ffmpeg` was a declared dependency that nothing imported, so it shipped to
+> customer machines for no reason; it was removed during the LGPL migration.
 
 **What it takes:**
 - **Export dialog** — container/codec targets, trim (frame-accurate in/out), scale, crop.

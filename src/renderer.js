@@ -115,6 +115,8 @@
   let streamEnded = false;          // ffmpeg finished sending data
   let firstDataReceived = false;    // Track when first chunk arrives
   let mseReady = false;             // MediaSource is open and SourceBuffer created
+  // Fallbacks only — the live value comes from electronAPI.getMseCodec(), which
+  // reflects the encoder the main process actually selected on this machine.
   const MSE_CODEC = 'video/mp4; codecs="avc1.640029,mp4a.40.2"'; // H.264 High 4.1 + AAC-LC
   const MSE_CODEC_VIDEO_ONLY = 'video/mp4; codecs="avc1.640029"'; // H.264 High 4.1 (no audio)
   const BUFFER_KEEP_BEHIND = 30;    // Seconds of buffer to keep behind currentTime
@@ -332,9 +334,18 @@
     streamEnded = false;
     firstDataReceived = false;
 
-    // Determine codec string based on whether file has audio
+    // Determine codec string based on whether file has audio. The main process
+    // owns this answer because it depends on which encoder was actually
+    // selected for this machine; the constants below are only a fallback for
+    // when that call fails.
     const hasAudio = !!(probeInfo.audioCodec);
-    const codecStr = hasAudio ? MSE_CODEC : MSE_CODEC_VIDEO_ONLY;
+    let codecStr = null;
+    try {
+      codecStr = await window.electronAPI.getMseCodec(hasAudio);
+    } catch (err) {
+      console.warn('[Renderer] getMseCodec failed, using default:', err.message);
+    }
+    if (!codecStr) codecStr = hasAudio ? MSE_CODEC : MSE_CODEC_VIDEO_ONLY;
     console.log('[Renderer] MSE codec:', codecStr, 'hasAudio:', hasAudio);
 
     // Check browser support

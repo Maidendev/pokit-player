@@ -26,9 +26,23 @@ jobs:
             paths: |
               dist/*.exe
               dist/latest.yml
-          - os: macos-latest
-            platformFlag: --mac
-            artifact: macos-installers
+          # macOS is built once per architecture, on a runner of that
+          # architecture. It used to be a single macos-latest job, which is an
+          # arm64 runner: npm install fetched the arm64 ffmpeg and
+          # electron-builder packaged it into BOTH the arm64 and the x64 DMG.
+          # The Intel build therefore shipped a binary that could not execute
+          # on an Intel Mac. Splitting the jobs is what prevents that, because
+          # each runner can only produce its own architecture.
+          - os: macos-14
+            platformFlag: --mac --arm64
+            artifact: macos-installers-arm64
+            paths: |
+              dist/*.dmg
+              dist/*.zip
+              dist/latest-mac.yml
+          - os: macos-13
+            platformFlag: --mac --x64
+            artifact: macos-installers-x64
             paths: |
               dist/*.dmg
               dist/*.zip
@@ -44,7 +58,27 @@ jobs:
           node-version: 20
           cache: npm
 
+      # postinstall fetches the pinned LGPL ffmpeg/ffprobe for Windows and
+      # Linux. On macOS it is a no-op and the build step below compiles them.
       - run: npm install
+
+      - name: Build LGPL FFmpeg (macOS only)
+        if: startsWith(matrix.os, 'macos')
+        run: ./scripts/build-ffmpeg-macos.sh
+
+      # Hard gate. Reads the compiled-in configure line out of every media
+      # binary and fails the build if any of them is GPL or non-distributable.
+      # This is what stops a GPL or --enable-nonfree binary reaching an
+      # installer again — pinned URLs say where a binary came from, only this
+      # says what is in it.
+      - name: Verify FFmpeg licence
+        run: npm run ffmpeg:verify
+
+      # Fails if any component in the dependency tree is copyleft or of
+      # undetermined licence. Kept separate from the FFmpeg gate so a failure
+      # says which of the two problems occurred.
+      - name: Verify open-source licence position
+        run: npm run oss:check
 
       # Say plainly in the log whether this build will be signed. Without this
       # an unsigned build looks identical to a signed one until a user hits

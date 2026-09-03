@@ -41,6 +41,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   renderImageSequence: (seqInfo, fps) => ipcRenderer.invoke('render-image-sequence', seqInfo, fps),
 
   // Stream decode operations (v1.1.0)
+  // The MSE codec string has to match whatever encoder the main process
+  // actually selected for this machine, so it is asked for rather than assumed.
+  getMseCodec: (hasAudio) => ipcRenderer.invoke('get-mse-codec', hasAudio),
   startStream: (filePath, seekTime) => ipcRenderer.invoke('start-stream', filePath, seekTime),
   stopStream: () => ipcRenderer.invoke('stop-stream'),
   seekStream: (time) => ipcRenderer.invoke('seek-stream', time),
