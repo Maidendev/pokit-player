@@ -1,0 +1,285 @@
+{
+  "$comment": [
+    "Components that ship inside PokitPlayer installers but are NOT visible to npm. npm only sees the wrapper packages (ffmpeg-static, ffprobe-static, electron).",
+    "It cannot see what those wrappers download or vendor, and in one case (ffprobe-static, declared MIT) the wrapper's declared license is NOT the license of the binary it ships.",
+    "This file is the hand-verified layer.",
+    "EVIDENCE: every 'configuration' string below was read directly out of the binary with `strings -a <binary> | grep -- --enable-gpl` on 2026-09-02, against ffmpeg-static 5.3.0 (release tag b6.1.1) and ffprobe-static 3.1.0.",
+    "Re-verify with `node scripts/generate-oss-inventory.js --verify` after any dependency bump.",
+    "Do not edit license fields from memory."
+  ],
+  "verifiedOn": "2026-09-02",
+  "components": [
+    {
+      "name": "Electron",
+      "version": "28.3.3",
+      "license": "MIT",
+      "supplier": "OpenJS Foundation / Electron contributors",
+      "shipsToCustomer": true,
+      "linkage": "runtime-bundled",
+      "modified": false,
+      "platforms": [
+        "win32-x64",
+        "darwin-x64",
+        "darwin-arm64",
+        "linux-x64"
+      ],
+      "source": "https://github.com/electron/electron",
+      "notes": [
+        "The application runtime.",
+        "Electron itself is MIT, but the shipped runtime embeds Chromium and Node.js, whose own component notices are enumerated in LICENSES.chromium.html (9.2 MB) inside the Electron distribution. electron-builder copies that file into the packaged app.",
+        "Electron 28 is end-of-life; see PINNED.md."
+      ]
+    },
+    {
+      "name": "Chromium",
+      "version": "120.0.6099.291",
+      "license": "BSD-3-Clause AND OTHER",
+      "supplier": "The Chromium Authors",
+      "shipsToCustomer": true,
+      "linkage": "runtime-bundled",
+      "modified": false,
+      "platforms": [
+        "win32-x64",
+        "darwin-x64",
+        "darwin-arm64",
+        "linux-x64"
+      ],
+      "source": "https://chromium.googlesource.com/chromium/src",
+      "notes": [
+        "Embedded in Electron 28.3.3, not consumed independently.",
+        "Its own third-party components are enumerated in LICENSES.chromium.html, shipped verbatim in the Electron distribution.",
+        "That file is the authoritative notice for this component - hand it to counsel as-is rather than re-summarising it."
+      ]
+    },
+    {
+      "name": "Node.js",
+      "version": "18.18.2",
+      "license": "MIT",
+      "supplier": "OpenJS Foundation",
+      "shipsToCustomer": true,
+      "linkage": "runtime-bundled",
+      "modified": false,
+      "platforms": [
+        "win32-x64",
+        "darwin-x64",
+        "darwin-arm64",
+        "linux-x64"
+      ],
+      "source": "https://github.com/nodejs/node",
+      "notes": [
+        "Embedded in Electron 28.3.3."
+      ]
+    },
+    {
+      "name": "FFmpeg (Electron internal libffmpeg)",
+      "version": "bundled with Electron 28.3.3",
+      "license": "LGPL-2.1-or-later",
+      "supplier": "FFmpeg project (build by Electron)",
+      "shipsToCustomer": true,
+      "linkage": "dynamic",
+      "modified": false,
+      "platforms": [
+        "win32-x64",
+        "darwin-x64",
+        "darwin-arm64",
+        "linux-x64"
+      ],
+      "source": "https://github.com/electron/electron",
+      "configuration": "libavformat license: LGPL version 2.1 or later",
+      "notes": [
+        "DISTINCT from the standalone ffmpeg CLI below, and licensed differently.",
+        "This is Chromium's internal media library (libffmpeg.so / .dylib / .dll), dynamically linked into the Electron runtime and used by the <video> element.",
+        "Verified LGPL, NOT GPL: the string 'libavformat license: LGPL version 2.1 or later' is compiled into the shipped library.",
+        "LGPL dynamic linking is satisfied here - the library is a separate shared object the user could replace.",
+        "Electron's default build enables proprietary codecs (H.264 / AAC); that raises a PATENT question, not an open-source licence question.",
+        "See the audit memo."
+      ]
+    },
+    {
+      "name": "FFmpeg (bundled CLI)",
+      "version": "6.1.1-essentials_build-www.gyan.dev",
+      "license": "GPL-3.0-or-later",
+      "supplier": "gyan.dev, via ffmpeg-static 5.3.0 (release tag b6.1.1)",
+      "shipsToCustomer": true,
+      "linkage": "separate-process",
+      "modified": false,
+      "platforms": [
+        "win32-x64"
+      ],
+      "source": "https://github.com/eugeneware/ffmpeg-static/releases/tag/b6.1.1",
+      "approximateSizeMb": 83,
+      "configuration": "--enable-gpl --enable-version3 --enable-static --pkg-config=pkgconf --disable-w32threads --disable-autodetect --enable-fontconfig --enable-iconv --enable-gnutls --enable-libxml2 --enable-gmp --enable-bzlib --enable-lzma --enable-zlib --enable-libsrt --enable-libssh --enable-libzmq --enable-avisynth --enable-sdl2 --enable-libwebp --enable-libx264 --enable-libx265 --enable-libxvid --enable-libaom --enable-libopenjpeg --enable-libvpx --enable-mediafoundation --enable-libass --enable-libfreetype --enable-libfribidi --enable-libharfbuzz --enable-libvidstab --enable-libvmaf --enable-libzimg --enable-amf --enable-cuda-llvm --enable-cuvid --enable-ffnvcodec --enable-nvdec --enable-nvenc --enable-dxva2 --enable-d3d11va --enable-libvpl --enable-libgme --enable-libopenmpt --enable-libopencore-amrwb --enable-libmp3lame --enable-libtheora --enable-libvo-amrwbenc --enable-libgsm --enable-libopencore-amrnb --enable-libopus --enable-libspeex --enable-libvorbis --enable-librubberband",
+      "copyleftTriggers": [
+        "--enable-gpl",
+        "--enable-version3",
+        "--enable-libx264 (GPL-2.0-or-later)",
+        "--enable-libx265 (GPL-2.0-or-later)",
+        "--enable-libxvid (GPL-2.0-or-later)",
+        "--enable-librubberband (GPL-2.0-or-later)",
+        "--enable-libvidstab (GPL-2.0-or-later)"
+      ],
+      "notes": [
+        "NOT the stock LGPL FFmpeg. --enable-gpl plus --enable-version3 makes the whole binary GPL-3.0-or-later. x264, x265, Xvid, Rubber Band and vid.stab are each independently GPL and each on their own force --enable-gpl.",
+        "Invoked only as a separate child process (child_process.spawn / execFile); there is no linking of any kind against the application code."
+      ]
+    },
+    {
+      "name": "FFmpeg (bundled CLI)",
+      "version": "6.1.1-tessus",
+      "license": "GPL-3.0-or-later",
+      "supplier": "Tessus (evermeet.cx), via ffmpeg-static 5.3.0 (release tag b6.1.1)",
+      "shipsToCustomer": true,
+      "linkage": "separate-process",
+      "modified": false,
+      "platforms": [
+        "darwin-x64"
+      ],
+      "source": "https://github.com/eugeneware/ffmpeg-static/releases/tag/b6.1.1",
+      "approximateSizeMb": 79,
+      "configuration": "--cc=/usr/bin/clang --prefix=/opt/ffmpeg --extra-version=tessus --enable-avisynth --enable-fontconfig --enable-gpl --enable-libaom --enable-libass --enable-libbluray --enable-libdav1d --enable-libfreetype --enable-libgsm --enable-libmodplug --enable-libmp3lame --enable-libmysofa --enable-libopencore-amrnb --enable-libopencore-amrwb --enable-libopenh264 --enable-libopenjpeg --enable-libopus --enable-librubberband --enable-libshine --enable-libsnappy --enable-libsoxr --enable-libspeex --enable-libtheora --enable-libtwolame --enable-libvidstab --enable-libvmaf --enable-libvo-amrwbenc --enable-libvorbis --enable-libvpx --enable-libwebp --enable-libx264 --enable-libx265 --enable-libxavs --enable-libxml2 --enable-libxvid --enable-libzimg --enable-libzmq --enable-libzvbi --enable-version3 --pkg-config-flags=--static --disable-ffplay",
+      "copyleftTriggers": [
+        "--enable-gpl",
+        "--enable-version3",
+        "--enable-libx264 (GPL-2.0-or-later)",
+        "--enable-libx265 (GPL-2.0-or-later)",
+        "--enable-libxvid (GPL-2.0-or-later)",
+        "--enable-librubberband (GPL-2.0-or-later)",
+        "--enable-libvidstab (GPL-2.0-or-later)",
+        "--enable-libxavs (GPL-2.0-or-later)"
+      ],
+      "notes": [
+        "GPL-3.0-or-later, same analysis as the Windows build.",
+        "Separate process only."
+      ]
+    },
+    {
+      "name": "FFmpeg (bundled CLI)",
+      "version": "6.0 (libavcodec 60.3.100)",
+      "license": "GPL-3.0-or-later AND NONFREE-UNDISTRIBUTABLE",
+      "supplier": "third-party macOS arm64 build, via ffmpeg-static 5.3.0 (release tag b6.1.1)",
+      "shipsToCustomer": true,
+      "linkage": "separate-process",
+      "modified": false,
+      "platforms": [
+        "darwin-arm64"
+      ],
+      "source": "https://github.com/eugeneware/ffmpeg-static/releases/tag/b6.1.1",
+      "approximateSizeMb": 46,
+      "configuration": "--prefix=/Volumes/tempdisk/sw --extra-cflags=-fno-stack-check --arch=arm64 --cc=/usr/bin/clang --enable-gpl --enable-libvmaf --enable-libbluray --enable-libopenjpeg --enable-libopus --enable-libmp3lame --enable-libx264 --enable-libx265 --enable-libvpx --enable-libwebp --enable-libass --enable-libfreetype --enable-fontconfig --enable-libtheora --enable-libvorbis --enable-libsnappy --enable-libaom --enable-libvidstab --enable-libzimg --enable-libsvtav1 --enable-libkvazaar --enable-version3 --pkg-config-flags=--static --enable-ffplay --enable-postproc --enable-nonfree --enable-neon --enable-runtime-cpudetect --disable-indev=qtkit --disable-indev=x11grab_xcb",
+      "copyleftTriggers": [
+        "--enable-nonfree (REDISTRIBUTION PROHIBITED)",
+        "--enable-gpl",
+        "--enable-version3",
+        "--enable-libx264 (GPL-2.0-or-later)",
+        "--enable-libx265 (GPL-2.0-or-later)",
+        "--enable-libvidstab (GPL-2.0-or-later)"
+      ],
+      "blocking": true,
+      "notes": [
+        "HIGHEST-SEVERITY FINDING.",
+        "This build carries --enable-nonfree.",
+        "FFmpeg's own position is that a --enable-nonfree build combines GPL code with terms incompatible with the GPL, and the resulting binary is UNREDISTRIBUTABLE - not merely copyleft-encumbered.",
+        "It cannot be shipped under any licence, including GPL.",
+        "This is the binary the macOS CI job downloads, because macos-latest is an arm64 runner and ffmpeg-static resolves the binary by host arch at `npm install` time.",
+        "Both the arm64 AND the x64 macOS DMG therefore carry this same arm64 nonfree binary - which is also a functional bug: it will not execute at all on an Intel Mac.",
+        "Fix is a build change, not a code change - see the audit memo."
+      ]
+    },
+    {
+      "name": "FFmpeg (bundled CLI)",
+      "version": "7.0.2-static",
+      "license": "GPL-3.0-or-later",
+      "supplier": "John Van Sickle, via ffmpeg-static 5.3.0 (release tag b6.1.1)",
+      "shipsToCustomer": true,
+      "linkage": "separate-process",
+      "modified": false,
+      "platforms": [
+        "linux-x64"
+      ],
+      "source": "https://johnvansickle.com/ffmpeg/",
+      "approximateSizeMb": 80,
+      "configuration": "--enable-gpl --enable-version3 --enable-static --disable-debug --disable-ffplay --disable-indev=sndio --disable-outdev=sndio --cc=gcc --enable-fontconfig --enable-frei0r --enable-gnutls --enable-gmp --enable-libgme --enable-gray --enable-libaom --enable-libfribidi --enable-libass --enable-libvmaf --enable-libfreetype --enable-libmp3lame --enable-libopencore-amrnb --enable-libopencore-amrwb --enable-libopenjpeg --enable-librubberband --enable-libsoxr --enable-libspeex --enable-libsrt --enable-libvorbis --enable-libopus --enable-libtheora --enable-libvidstab --enable-libvo-amrwbenc --enable-libvpx --enable-libwebp --enable-libx264 --enable-libx265 --enable-libxml2 --enable-libdav1d --enable-libxvid --enable-libzvbi --enable-libzimg",
+      "copyleftTriggers": [
+        "--enable-gpl",
+        "--enable-version3",
+        "--enable-frei0r (GPL-2.0-or-later)",
+        "--enable-libx264 (GPL-2.0-or-later)",
+        "--enable-libx265 (GPL-2.0-or-later)",
+        "--enable-libxvid (GPL-2.0-or-later)",
+        "--enable-librubberband (GPL-2.0-or-later)",
+        "--enable-libvidstab (GPL-2.0-or-later)"
+      ],
+      "notes": [
+        "Linux AppImage / deb only.",
+        "The build's own README states plainly: 'This static build is licensed under the GNU General Public License version 3.' Ships only if the Linux targets are released; CI currently builds Windows and macOS only."
+      ]
+    },
+    {
+      "name": "ffprobe (bundled CLI)",
+      "version": "4.0.2 (libavcodec 58.18.100)",
+      "license": "GPL-3.0-or-later",
+      "supplier": "ffprobe-static 3.1.0 (vendored binaries)",
+      "shipsToCustomer": true,
+      "linkage": "separate-process",
+      "modified": false,
+      "platforms": [
+        "win32-x64",
+        "win32-ia32",
+        "linux-x64",
+        "linux-ia32",
+        "darwin-x64"
+      ],
+      "source": "https://github.com/joshwnj/ffprobe-static",
+      "approximateSizeMb": 63,
+      "configuration": "--enable-gpl --enable-version3 --enable-static --enable-libx264 --enable-libx265 --enable-libxvid --enable-librubberband --enable-frei0r (full string varies per platform; see generator evidence)",
+      "copyleftTriggers": [
+        "--enable-gpl",
+        "--enable-version3",
+        "--enable-libx264 (GPL-2.0-or-later)",
+        "--enable-libx265 (GPL-2.0-or-later)"
+      ],
+      "licenseMismatch": {
+        "declaredByPackageManager": "MIT",
+        "actual": "GPL-3.0-or-later",
+        "explanation": [
+          "ffprobe-static's package.json declares MIT.",
+          "That MIT covers roughly 20 lines of JavaScript that resolve a path.",
+          "The binaries it vendors are --enable-gpl --enable-version3 FFmpeg builds.",
+          "Any tool that reads only package metadata - npm sbom, license-checker, most SCA scanners - will report this component as MIT and miss a GPL obligation entirely.",
+          "This is exactly why this file exists."
+        ]
+      },
+      "notes": [
+        "ffprobe-static vendors binaries for all platforms in the package; package.json build.files prunes the non-target platforms per build."
+      ]
+    },
+    {
+      "name": "ffprobe (bundled CLI)",
+      "version": "4.4 (libavcodec 58.134.100), Tessus build",
+      "license": "GPL-3.0-or-later",
+      "supplier": "ffprobe-static 3.1.0 (vendored binaries)",
+      "shipsToCustomer": true,
+      "linkage": "separate-process",
+      "modified": false,
+      "platforms": [
+        "darwin-arm64"
+      ],
+      "source": "https://github.com/joshwnj/ffprobe-static",
+      "approximateSizeMb": 77,
+      "configuration": "--cc=/usr/bin/clang --prefix=/opt/ffmpeg --extra-version=tessus --enable-avisynth --enable-fontconfig --enable-gpl --enable-libaom --enable-libass --enable-libbluray --enable-libdav1d --enable-libfreetype --enable-libgsm --enable-libmodplug --enable-libmp3lame --enable-libmysofa --enable-libopencore-amrnb --enable-libopencore-amrwb --enable-libopenh264 --enable-libopenjpeg --enable-libopus --enable-librubberband --enable-libshine --enable-libsnappy --enable-libsoxr --enable-libspeex --enable-libtheora --enable-libtwolame --enable-libvidstab --enable-libvmaf --enable-libvo-amrwbenc --enable-libvorbis --enable-libvpx --enable-libwebp --enable-libx264 --enable-libx265 --enable-libxavs --enable-libxvid --enable-libzimg --enable-libzmq --enable-libzvbi --enable-version3 --pkg-config-flags=--static --disable-ffplay",
+      "copyleftTriggers": [
+        "--enable-gpl",
+        "--enable-version3",
+        "--enable-libx264 (GPL-2.0-or-later)",
+        "--enable-libx265 (GPL-2.0-or-later)",
+        "--enable-libxvid (GPL-2.0-or-later)",
+        "--enable-libxavs (GPL-2.0-or-later)"
+      ],
+      "notes": [
+        "Filed under bin/darwin/arm64 but the Mach-O header says x86_64 - it is NOT an arm64 binary.",
+        "On Apple Silicon it runs under Rosetta 2, and fails outright if Rosetta is not installed.",
+        "Functional bug, flagged here because it changes which binary actually reaches a customer machine."
+      ]
+    }
+  ]
+}

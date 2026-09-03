@@ -1,0 +1,2019 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-09-03T01:12:57Z",
+    "tools": [
+      {
+        "vendor": "Maiden Media Solutions INC.",
+        "name": "generate-oss-inventory",
+        "version": "1.0.0"
+      }
+    ],
+    "component": {
+      "type": "application",
+      "bom-ref": "pkg:npm/pokitplayer@1.2.7",
+      "name": "PokitPlayer",
+      "version": "1.2.7",
+      "purl": "pkg:npm/pokitplayer@1.2.7",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "supplier": {
+        "name": "Maiden Media Solutions INC."
+      }
+    },
+    "properties": [
+      {
+        "name": "pokit:scope",
+        "value": "desktop player, distributed to customer machines"
+      },
+      {
+        "name": "pokit:nativeEvidenceVerifiedOn",
+        "value": "2026-09-02"
+      }
+    ]
+  },
+  "components": [
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/%40derhuerst/http-basic@8.2.4",
+      "name": "@derhuerst/http-basic",
+      "version": "8.2.4",
+      "purl": "pkg:npm/%40derhuerst/http-basic@8.2.4",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "pokit:linkage",
+          "value": "javascript-require"
+        },
+        {
+          "name": "pokit:modified",
+          "value": "false"
+        },
+        {
+          "name": "pokit:shipsToCustomer",
+          "value": "true"
+        },
+        {
+          "name": "pokit:licenseClass",
+          "value": "permissive"
+        },
+        {
+          "name": "pokit:licenseEvidence",
+          "value": "package-lock.json"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/%40types/node@10.17.60",
+      "name": "@types/node",
+      "version": "10.17.60",
+      "purl": "pkg:npm/%40types/node@10.17.60",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "pokit:linkage",
+          "value": "javascript-require"
+        },
+        {
+          "name": "pokit:modified",
+          "value": "false"
+        },
+        {
+          "name": "pokit:shipsToCustomer",
+          "value": "true"
+        },
+        {
+          "name": "pokit:licenseClass",
+          "value": "permissive"
+        },
+        {
+          "name": "pokit:licenseEvidence",
+          "value": "package-lock.json"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/agent-base@6.0.2",
+      "name": "agent-base",
+      "version": "6.0.2",
+      "purl": "pkg:npm/agent-base@6.0.2",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "pokit:linkage",
+          "value": "javascript-require"
+        },
+        {
+          "name": "pokit:modified",
+          "value": "false"
+        },
+        {
+          "name": "pokit:shipsToCustomer",
+          "value": "true"
+        },
+        {
+          "name": "pokit:licenseClass",
+          "value": "permissive"
+        },
+        {
+          "name": "pokit:licenseEvidence",
+          "value": "package-lock.json"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/argparse@2.0.1",
+      "name": "argparse",
+      "version": "2.0.1",
+      "purl": "pkg:npm/argparse@2.0.1",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "name": "Python-2.0"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "pokit:linkage",
+          "value": "javascript-require"
+        },
+        {
+          "name": "pokit:modified",
+          "value": "false"
+        },
+        {
+          "name": "pokit:shipsToCustomer",
+          "value": "true"
+        },
+        {
+          "name": "pokit:licenseClass",
+          "value": "permissive"
+        },
+        {
+          "name": "pokit:licenseEvidence",
+          "value": "package-lock.json"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/async@0.2.10",
+      "name": "async",
+      "version": "0.2.10",
+      "purl": "pkg:npm/async@0.2.10",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "pokit:linkage",
+          "value": "javascript-require"
+        },
+        {
+          "name": "pokit:modified",
+          "value": "false"
+        },
+        {
+          "name": "pokit:shipsToCustomer",
+          "value": "true"
+        },
+        {
+          "name": "pokit:licenseClass",
+          "value": "permissive"
+        },
+        {
+          "name": "pokit:licenseEvidence",
+          "value": "node_modules/fluent-ffmpeg/node_modules/async/LICENSE — \"Copyright (c) 2010 Caolan McMahon\", verbatim MIT text"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/buffer-from@1.1.2",
+      "name": "buffer-from",
+      "version": "1.1.2",
+      "purl": "pkg:npm/buffer-from@1.1.2",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "pokit:linkage",
+          "value": "javascript-require"
+        },
+        {
+          "name": "pokit:modified",
+          "value": "false"
+        },
+        {
+          "name": "pokit:shipsToCustomer",
+          "value": "true"
+        },
+        {
+          "name": "pokit:licenseClass",
+          "value": "permissive"
+        },
+        {
+          "name": "pokit:licenseEvidence",
+          "value": "package-lock.json"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/builder-util-runtime@9.7.0",
+      "name": "builder-util-runtime",
+      "version": "9.7.0",
+      "purl": "pkg:npm/builder-util-runtime@9.7.0",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "pokit:linkage",
+          "value": "javascript-require"
+        },
+        {
+          "name": "pokit:modified",
+          "value": "false"
+        },
+        {
+          "name": "pokit:shipsToCustomer",
+          "value": "true"
+        },
+        {
+          "name": "pokit:licenseClass",
+          "value": "permissive"
+        },
+        {
+          "name": "pokit:licenseEvidence",
+          "value": "package-lock.json"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/caseless@0.12.0",
+      "name": "caseless",
+      "version": "0.12.0",
+      "purl": "pkg:npm/caseless@0.12.0",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "name": "Apache-2.0"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "pokit:linkage",
+          "value": "javascript-require"
+        },
+        {
+          "name": "pokit:modified",
+          "value": "false"
+        },
+        {
+          "name": "pokit:shipsToCustomer",
+          "value": "true"
+        },
+        {
+          "name": "pokit:licenseClass",
+          "value": "permissive"
+        },
+        {
+          "name": "pokit:licenseEvidence",
+          "value": "package-lock.json"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/concat-stream@2.0.0",
+      "name": "concat-stream",
+      "version": "2.0.0",
+      "purl": "pkg:npm/concat-stream@2.0.0",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "pokit:linkage",
+          "value": "javascript-require"
+        },
+        {
+          "name": "pokit:modified",
+          "value": "false"
+        },
+        {
+          "name": "pokit:shipsToCustomer",
+          "value": "true"
+        },
+        {
+          "name": "pokit:licenseClass",
+          "value": "permissive"
+        },
+        {
+          "name": "pokit:licenseEvidence",
+          "value": "package-lock.json"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/debug@4.4.3",
+      "name": "debug",
+      "version": "4.4.3",
+      "purl": "pkg:npm/debug@4.4.3",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "pokit:linkage",
+          "value": "javascript-require"
+        },
+        {
+          "name": "pokit:modified",
+          "value": "false"
+        },
+        {
+          "name": "pokit:shipsToCustomer",
+          "value": "true"
+        },
+        {
+          "name": "pokit:licenseClass",
+          "value": "permissive"
+        },
+        {
+          "name": "pokit:licenseEvidence",
+          "value": "package-lock.json"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/electron-updater@6.8.9",
+      "name": "electron-updater",
+      "version": "6.8.9",
+      "purl": "pkg:npm/electron-updater@6.8.9",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "pokit:linkage",
+          "value": "javascript-require"
+        },
+        {
+          "name": "pokit:modified",
+          "value": "false"
+        },
+        {
+          "name": "pokit:shipsToCustomer",
+          "value": "true"
+        },
+        {
+          "name": "pokit:licenseClass",
+          "value": "permissive"
+        },
+        {
+          "name": "pokit:licenseEvidence",
+          "value": "package-lock.json"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/env-paths@2.2.1",
+      "name": "env-paths",
+      "version": "2.2.1",
+      "purl": "pkg:npm/env-paths@2.2.1",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "pokit:linkage",
+          "value": "javascript-require"
+        },
+        {
+          "name": "pokit:modified",
+          "value": "false"
+        },
+        {
+          "name": "pokit:shipsToCustomer",
+          "value": "true"
+        },
+        {
+          "name": "pokit:licenseClass",
+          "value": "permissive"
+        },
+        {
+          "name": "pokit:licenseEvidence",
+          "value": "package-lock.json"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/ffmpeg-static@5.3.0",
+      "name": "ffmpeg-static",
+      "version": "5.3.0",
+      "purl": "pkg:npm/ffmpeg-static@5.3.0",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "name": "GPL-3.0-or-later"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "pokit:linkage",
+          "value": "javascript-require"
+        },
+        {
+          "name": "pokit:modified",
+          "value": "false"
+        },
+        {
+          "name": "pokit:shipsToCustomer",
+          "value": "true"
+        },
+        {
+          "name": "pokit:licenseClass",
+          "value": "strong-copyleft"
+        },
+        {
+          "name": "pokit:licenseEvidence",
+          "value": "package-lock.json"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/ffprobe-static@3.1.0",
+      "name": "ffprobe-static",
+      "version": "3.1.0",
+      "purl": "pkg:npm/ffprobe-static@3.1.0",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "pokit:linkage",
+          "value": "javascript-require"
+        },
+        {
+          "name": "pokit:modified",
+          "value": "false"
+        },
+        {
+          "name": "pokit:shipsToCustomer",
+          "value": "true"
+        },
+        {
+          "name": "pokit:licenseClass",
+          "value": "permissive"
+        },
+        {
+          "name": "pokit:licenseEvidence",
+          "value": "package-lock.json"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/fluent-ffmpeg@2.1.3",
+      "name": "fluent-ffmpeg",
+      "version": "2.1.3",
+      "purl": "pkg:npm/fluent-ffmpeg@2.1.3",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "pokit:linkage",
+          "value": "javascript-require"
+        },
+        {
+          "name": "pokit:modified",
+          "value": "false"
+        },
+        {
+          "name": "pokit:shipsToCustomer",
+          "value": "true"
+        },
+        {
+          "name": "pokit:licenseClass",
+          "value": "permissive"
+        },
+        {
+          "name": "pokit:licenseEvidence",
+          "value": "package-lock.json"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/fs-extra@10.1.0",
+      "name": "fs-extra",
+      "version": "10.1.0",
+      "purl": "pkg:npm/fs-extra@10.1.0",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "pokit:linkage",
+          "value": "javascript-require"
+        },
+        {
+          "name": "pokit:modified",
+          "value": "false"
+        },
+        {
+          "name": "pokit:shipsToCustomer",
+          "value": "true"
+        },
+        {
+          "name": "pokit:licenseClass",
+          "value": "permissive"
+        },
+        {
+          "name": "pokit:licenseEvidence",
+          "value": "package-lock.json"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/graceful-fs@4.2.11",
+      "name": "graceful-fs",
+      "version": "4.2.11",
+      "purl": "pkg:npm/graceful-fs@4.2.11",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "name": "ISC"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "pokit:linkage",
+          "value": "javascript-require"
+        },
+        {
+          "name": "pokit:modified",
+          "value": "false"
+        },
+        {
+          "name": "pokit:shipsToCustomer",
+          "value": "true"
+        },
+        {
+          "name": "pokit:licenseClass",
+          "value": "permissive"
+        },
+        {
+          "name": "pokit:licenseEvidence",
+          "value": "package-lock.json"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/http-response-object@3.0.2",
+      "name": "http-response-object",
+      "version": "3.0.2",
+      "purl": "pkg:npm/http-response-object@3.0.2",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "pokit:linkage",
+          "value": "javascript-require"
+        },
+        {
+          "name": "pokit:modified",
+          "value": "false"
+        },
+        {
+          "name": "pokit:shipsToCustomer",
+          "value": "true"
+        },
+        {
+          "name": "pokit:licenseClass",
+          "value": "permissive"
+        },
+        {
+          "name": "pokit:licenseEvidence",
+          "value": "package-lock.json"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/https-proxy-agent@5.0.1",
+      "name": "https-proxy-agent",
+      "version": "5.0.1",
+      "purl": "pkg:npm/https-proxy-agent@5.0.1",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "pokit:linkage",
+          "value": "javascript-require"
+        },
+        {
+          "name": "pokit:modified",
+          "value": "false"
+        },
+        {
+          "name": "pokit:shipsToCustomer",
+          "value": "true"
+        },
+        {
+          "name": "pokit:licenseClass",
+          "value": "permissive"
+        },
+        {
+          "name": "pokit:licenseEvidence",
+          "value": "package-lock.json"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/inherits@2.0.4",
+      "name": "inherits",
+      "version": "2.0.4",
+      "purl": "pkg:npm/inherits@2.0.4",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "name": "ISC"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "pokit:linkage",
+          "value": "javascript-require"
+        },
+        {
+          "name": "pokit:modified",
+          "value": "false"
+        },
+        {
+          "name": "pokit:shipsToCustomer",
+          "value": "true"
+        },
+        {
+          "name": "pokit:licenseClass",
+          "value": "permissive"
+        },
+        {
+          "name": "pokit:licenseEvidence",
+          "value": "package-lock.json"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/isexe@2.0.0",
+      "name": "isexe",
+      "version": "2.0.0",
+      "purl": "pkg:npm/isexe@2.0.0",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "name": "ISC"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "pokit:linkage",
+          "value": "javascript-require"
+        },
+        {
+          "name": "pokit:modified",
+          "value": "false"
+        },
+        {
+          "name": "pokit:shipsToCustomer",
+          "value": "true"
+        },
+        {
+          "name": "pokit:licenseClass",
+          "value": "permissive"
+        },
+        {
+          "name": "pokit:licenseEvidence",
+          "value": "package-lock.json"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/js-yaml@4.3.1",
+      "name": "js-yaml",
+      "version": "4.3.1",
+      "purl": "pkg:npm/js-yaml@4.3.1",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "pokit:linkage",
+          "value": "javascript-require"
+        },
+        {
+          "name": "pokit:modified",
+          "value": "false"
+        },
+        {
+          "name": "pokit:shipsToCustomer",
+          "value": "true"
+        },
+        {
+          "name": "pokit:licenseClass",
+          "value": "permissive"
+        },
+        {
+          "name": "pokit:licenseEvidence",
+          "value": "package-lock.json"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/jsonfile@6.2.1",
+      "name": "jsonfile",
+      "version": "6.2.1",
+      "purl": "pkg:npm/jsonfile@6.2.1",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "pokit:linkage",
+          "value": "javascript-require"
+        },
+        {
+          "name": "pokit:modified",
+          "value": "false"
+        },
+        {
+          "name": "pokit:shipsToCustomer",
+          "value": "true"
+        },
+        {
+          "name": "pokit:licenseClass",
+          "value": "permissive"
+        },
+        {
+          "name": "pokit:licenseEvidence",
+          "value": "package-lock.json"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/lazy-val@1.0.5",
+      "name": "lazy-val",
+      "version": "1.0.5",
+      "purl": "pkg:npm/lazy-val@1.0.5",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "pokit:linkage",
+          "value": "javascript-require"
+        },
+        {
+          "name": "pokit:modified",
+          "value": "false"
+        },
+        {
+          "name": "pokit:shipsToCustomer",
+          "value": "true"
+        },
+        {
+          "name": "pokit:licenseClass",
+          "value": "permissive"
+        },
+        {
+          "name": "pokit:licenseEvidence",
+          "value": "package-lock.json"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/lodash.escaperegexp@4.1.2",
+      "name": "lodash.escaperegexp",
+      "version": "4.1.2",
+      "purl": "pkg:npm/lodash.escaperegexp@4.1.2",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "pokit:linkage",
+          "value": "javascript-require"
+        },
+        {
+          "name": "pokit:modified",
+          "value": "false"
+        },
+        {
+          "name": "pokit:shipsToCustomer",
+          "value": "true"
+        },
+        {
+          "name": "pokit:licenseClass",
+          "value": "permissive"
+        },
+        {
+          "name": "pokit:licenseEvidence",
+          "value": "package-lock.json"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/lodash.isequal@4.5.0",
+      "name": "lodash.isequal",
+      "version": "4.5.0",
+      "purl": "pkg:npm/lodash.isequal@4.5.0",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "pokit:linkage",
+          "value": "javascript-require"
+        },
+        {
+          "name": "pokit:modified",
+          "value": "false"
+        },
+        {
+          "name": "pokit:shipsToCustomer",
+          "value": "true"
+        },
+        {
+          "name": "pokit:licenseClass",
+          "value": "permissive"
+        },
+        {
+          "name": "pokit:licenseEvidence",
+          "value": "package-lock.json"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/ms@2.1.3",
+      "name": "ms",
+      "version": "2.1.3",
+      "purl": "pkg:npm/ms@2.1.3",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "pokit:linkage",
+          "value": "javascript-require"
+        },
+        {
+          "name": "pokit:modified",
+          "value": "false"
+        },
+        {
+          "name": "pokit:shipsToCustomer",
+          "value": "true"
+        },
+        {
+          "name": "pokit:licenseClass",
+          "value": "permissive"
+        },
+        {
+          "name": "pokit:licenseEvidence",
+          "value": "package-lock.json"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/parse-cache-control@1.0.1",
+      "name": "parse-cache-control",
+      "version": "1.0.1",
+      "purl": "pkg:npm/parse-cache-control@1.0.1",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "name": "BSD-3-Clause"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "pokit:linkage",
+          "value": "javascript-require"
+        },
+        {
+          "name": "pokit:modified",
+          "value": "false"
+        },
+        {
+          "name": "pokit:shipsToCustomer",
+          "value": "true"
+        },
+        {
+          "name": "pokit:licenseClass",
+          "value": "permissive"
+        },
+        {
+          "name": "pokit:licenseEvidence",
+          "value": "node_modules/parse-cache-control/LICENSE — \"Copyright (c) 2012-2014, Walmart\", 3-clause BSD incl. no-endorsement clause"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/progress@2.0.3",
+      "name": "progress",
+      "version": "2.0.3",
+      "purl": "pkg:npm/progress@2.0.3",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "pokit:linkage",
+          "value": "javascript-require"
+        },
+        {
+          "name": "pokit:modified",
+          "value": "false"
+        },
+        {
+          "name": "pokit:shipsToCustomer",
+          "value": "true"
+        },
+        {
+          "name": "pokit:licenseClass",
+          "value": "permissive"
+        },
+        {
+          "name": "pokit:licenseEvidence",
+          "value": "package-lock.json"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/readable-stream@3.6.2",
+      "name": "readable-stream",
+      "version": "3.6.2",
+      "purl": "pkg:npm/readable-stream@3.6.2",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "pokit:linkage",
+          "value": "javascript-require"
+        },
+        {
+          "name": "pokit:modified",
+          "value": "false"
+        },
+        {
+          "name": "pokit:shipsToCustomer",
+          "value": "true"
+        },
+        {
+          "name": "pokit:licenseClass",
+          "value": "permissive"
+        },
+        {
+          "name": "pokit:licenseEvidence",
+          "value": "package-lock.json"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/safe-buffer@5.2.1",
+      "name": "safe-buffer",
+      "version": "5.2.1",
+      "purl": "pkg:npm/safe-buffer@5.2.1",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "pokit:linkage",
+          "value": "javascript-require"
+        },
+        {
+          "name": "pokit:modified",
+          "value": "false"
+        },
+        {
+          "name": "pokit:shipsToCustomer",
+          "value": "true"
+        },
+        {
+          "name": "pokit:licenseClass",
+          "value": "permissive"
+        },
+        {
+          "name": "pokit:licenseEvidence",
+          "value": "package-lock.json"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/sax@1.6.1",
+      "name": "sax",
+      "version": "1.6.1",
+      "purl": "pkg:npm/sax@1.6.1",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "name": "BlueOak-1.0.0"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "pokit:linkage",
+          "value": "javascript-require"
+        },
+        {
+          "name": "pokit:modified",
+          "value": "false"
+        },
+        {
+          "name": "pokit:shipsToCustomer",
+          "value": "true"
+        },
+        {
+          "name": "pokit:licenseClass",
+          "value": "permissive"
+        },
+        {
+          "name": "pokit:licenseEvidence",
+          "value": "package-lock.json"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/semver@7.7.4",
+      "name": "semver",
+      "version": "7.7.4",
+      "purl": "pkg:npm/semver@7.7.4",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "name": "ISC"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "pokit:linkage",
+          "value": "javascript-require"
+        },
+        {
+          "name": "pokit:modified",
+          "value": "false"
+        },
+        {
+          "name": "pokit:shipsToCustomer",
+          "value": "true"
+        },
+        {
+          "name": "pokit:licenseClass",
+          "value": "permissive"
+        },
+        {
+          "name": "pokit:licenseEvidence",
+          "value": "package-lock.json"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/string_decoder@1.3.0",
+      "name": "string_decoder",
+      "version": "1.3.0",
+      "purl": "pkg:npm/string_decoder@1.3.0",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "pokit:linkage",
+          "value": "javascript-require"
+        },
+        {
+          "name": "pokit:modified",
+          "value": "false"
+        },
+        {
+          "name": "pokit:shipsToCustomer",
+          "value": "true"
+        },
+        {
+          "name": "pokit:licenseClass",
+          "value": "permissive"
+        },
+        {
+          "name": "pokit:licenseEvidence",
+          "value": "package-lock.json"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/tiny-typed-emitter@2.1.0",
+      "name": "tiny-typed-emitter",
+      "version": "2.1.0",
+      "purl": "pkg:npm/tiny-typed-emitter@2.1.0",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "pokit:linkage",
+          "value": "javascript-require"
+        },
+        {
+          "name": "pokit:modified",
+          "value": "false"
+        },
+        {
+          "name": "pokit:shipsToCustomer",
+          "value": "true"
+        },
+        {
+          "name": "pokit:licenseClass",
+          "value": "permissive"
+        },
+        {
+          "name": "pokit:licenseEvidence",
+          "value": "package-lock.json"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/typedarray@0.0.6",
+      "name": "typedarray",
+      "version": "0.0.6",
+      "purl": "pkg:npm/typedarray@0.0.6",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "pokit:linkage",
+          "value": "javascript-require"
+        },
+        {
+          "name": "pokit:modified",
+          "value": "false"
+        },
+        {
+          "name": "pokit:shipsToCustomer",
+          "value": "true"
+        },
+        {
+          "name": "pokit:licenseClass",
+          "value": "permissive"
+        },
+        {
+          "name": "pokit:licenseEvidence",
+          "value": "package-lock.json"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/universalify@2.0.1",
+      "name": "universalify",
+      "version": "2.0.1",
+      "purl": "pkg:npm/universalify@2.0.1",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "pokit:linkage",
+          "value": "javascript-require"
+        },
+        {
+          "name": "pokit:modified",
+          "value": "false"
+        },
+        {
+          "name": "pokit:shipsToCustomer",
+          "value": "true"
+        },
+        {
+          "name": "pokit:licenseClass",
+          "value": "permissive"
+        },
+        {
+          "name": "pokit:licenseEvidence",
+          "value": "package-lock.json"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/util-deprecate@1.0.2",
+      "name": "util-deprecate",
+      "version": "1.0.2",
+      "purl": "pkg:npm/util-deprecate@1.0.2",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "pokit:linkage",
+          "value": "javascript-require"
+        },
+        {
+          "name": "pokit:modified",
+          "value": "false"
+        },
+        {
+          "name": "pokit:shipsToCustomer",
+          "value": "true"
+        },
+        {
+          "name": "pokit:licenseClass",
+          "value": "permissive"
+        },
+        {
+          "name": "pokit:licenseEvidence",
+          "value": "package-lock.json"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/which@1.3.1",
+      "name": "which",
+      "version": "1.3.1",
+      "purl": "pkg:npm/which@1.3.1",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "name": "ISC"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "pokit:linkage",
+          "value": "javascript-require"
+        },
+        {
+          "name": "pokit:modified",
+          "value": "false"
+        },
+        {
+          "name": "pokit:shipsToCustomer",
+          "value": "true"
+        },
+        {
+          "name": "pokit:licenseClass",
+          "value": "permissive"
+        },
+        {
+          "name": "pokit:licenseEvidence",
+          "value": "package-lock.json"
+        }
+      ]
+    },
+    {
+      "type": "application",
+      "bom-ref": "pkg:generic/electron@28.3.3",
+      "name": "Electron",
+      "version": "28.3.3",
+      "purl": "pkg:generic/electron@28.3.3",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "pokit:linkage",
+          "value": "runtime-bundled"
+        },
+        {
+          "name": "pokit:modified",
+          "value": "false"
+        },
+        {
+          "name": "pokit:shipsToCustomer",
+          "value": "true"
+        },
+        {
+          "name": "pokit:licenseClass",
+          "value": "permissive"
+        },
+        {
+          "name": "pokit:licenseEvidence",
+          "value": "upstream project declaration"
+        },
+        {
+          "name": "pokit:platforms",
+          "value": "win32-x64,darwin-x64,darwin-arm64,linux-x64"
+        }
+      ],
+      "supplier": {
+        "name": "OpenJS Foundation / Electron contributors"
+      },
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://github.com/electron/electron"
+        }
+      ]
+    },
+    {
+      "type": "application",
+      "bom-ref": "pkg:generic/chromium@120.0.6099.291",
+      "name": "Chromium",
+      "version": "120.0.6099.291",
+      "purl": "pkg:generic/chromium@120.0.6099.291",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "name": "BSD-3-Clause AND OTHER"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "pokit:linkage",
+          "value": "runtime-bundled"
+        },
+        {
+          "name": "pokit:modified",
+          "value": "false"
+        },
+        {
+          "name": "pokit:shipsToCustomer",
+          "value": "true"
+        },
+        {
+          "name": "pokit:licenseClass",
+          "value": "permissive"
+        },
+        {
+          "name": "pokit:licenseEvidence",
+          "value": "upstream project declaration"
+        },
+        {
+          "name": "pokit:platforms",
+          "value": "win32-x64,darwin-x64,darwin-arm64,linux-x64"
+        }
+      ],
+      "supplier": {
+        "name": "The Chromium Authors"
+      },
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://chromium.googlesource.com/chromium/src"
+        }
+      ]
+    },
+    {
+      "type": "application",
+      "bom-ref": "pkg:generic/node-js@18.18.2",
+      "name": "Node.js",
+      "version": "18.18.2",
+      "purl": "pkg:generic/node-js@18.18.2",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "pokit:linkage",
+          "value": "runtime-bundled"
+        },
+        {
+          "name": "pokit:modified",
+          "value": "false"
+        },
+        {
+          "name": "pokit:shipsToCustomer",
+          "value": "true"
+        },
+        {
+          "name": "pokit:licenseClass",
+          "value": "permissive"
+        },
+        {
+          "name": "pokit:licenseEvidence",
+          "value": "upstream project declaration"
+        },
+        {
+          "name": "pokit:platforms",
+          "value": "win32-x64,darwin-x64,darwin-arm64,linux-x64"
+        }
+      ],
+      "supplier": {
+        "name": "OpenJS Foundation"
+      },
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://github.com/nodejs/node"
+        }
+      ]
+    },
+    {
+      "type": "application",
+      "bom-ref": "pkg:generic/ffmpeg-electron-internal-libffmpeg@bundled%20with%20Electron%2028.3.3",
+      "name": "FFmpeg (Electron internal libffmpeg)",
+      "version": "bundled with Electron 28.3.3",
+      "purl": "pkg:generic/ffmpeg-electron-internal-libffmpeg@bundled%20with%20Electron%2028.3.3",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "name": "LGPL-2.1-or-later"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "pokit:linkage",
+          "value": "dynamic"
+        },
+        {
+          "name": "pokit:modified",
+          "value": "false"
+        },
+        {
+          "name": "pokit:shipsToCustomer",
+          "value": "true"
+        },
+        {
+          "name": "pokit:licenseClass",
+          "value": "weak-copyleft"
+        },
+        {
+          "name": "pokit:licenseEvidence",
+          "value": "compiled-in configuration string read from the shipped binary"
+        },
+        {
+          "name": "pokit:platforms",
+          "value": "win32-x64,darwin-x64,darwin-arm64,linux-x64"
+        },
+        {
+          "name": "pokit:buildConfiguration",
+          "value": "libavformat license: LGPL version 2.1 or later"
+        }
+      ],
+      "supplier": {
+        "name": "FFmpeg project (build by Electron)"
+      },
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://github.com/electron/electron"
+        }
+      ]
+    },
+    {
+      "type": "application",
+      "bom-ref": "pkg:generic/ffmpeg-bundled-cli@6.1.1-essentials_build-www.gyan.dev",
+      "name": "FFmpeg (bundled CLI)",
+      "version": "6.1.1-essentials_build-www.gyan.dev",
+      "purl": "pkg:generic/ffmpeg-bundled-cli@6.1.1-essentials_build-www.gyan.dev",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "name": "GPL-3.0-or-later"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "pokit:linkage",
+          "value": "separate-process"
+        },
+        {
+          "name": "pokit:modified",
+          "value": "false"
+        },
+        {
+          "name": "pokit:shipsToCustomer",
+          "value": "true"
+        },
+        {
+          "name": "pokit:licenseClass",
+          "value": "strong-copyleft"
+        },
+        {
+          "name": "pokit:licenseEvidence",
+          "value": "compiled-in configuration string read from the shipped binary"
+        },
+        {
+          "name": "pokit:platforms",
+          "value": "win32-x64"
+        },
+        {
+          "name": "pokit:buildConfiguration",
+          "value": "--enable-gpl --enable-version3 --enable-static --pkg-config=pkgconf --disable-w32threads --disable-autodetect --enable-fontconfig --enable-iconv --enable-gnutls --enable-libxml2 --enable-gmp --enable-bzlib --enable-lzma --enable-zlib --enable-libsrt --enable-libssh --enable-libzmq --enable-avisynth --enable-sdl2 --enable-libwebp --enable-libx264 --enable-libx265 --enable-libxvid --enable-libaom --enable-libopenjpeg --enable-libvpx --enable-mediafoundation --enable-libass --enable-libfreetype --enable-libfribidi --enable-libharfbuzz --enable-libvidstab --enable-libvmaf --enable-libzimg --enable-amf --enable-cuda-llvm --enable-cuvid --enable-ffnvcodec --enable-nvdec --enable-nvenc --enable-dxva2 --enable-d3d11va --enable-libvpl --enable-libgme --enable-libopenmpt --enable-libopencore-amrwb --enable-libmp3lame --enable-libtheora --enable-libvo-amrwbenc --enable-libgsm --enable-libopencore-amrnb --enable-libopus --enable-libspeex --enable-libvorbis --enable-librubberband"
+        }
+      ],
+      "supplier": {
+        "name": "gyan.dev, via ffmpeg-static 5.3.0 (release tag b6.1.1)"
+      },
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://github.com/eugeneware/ffmpeg-static/releases/tag/b6.1.1"
+        }
+      ]
+    },
+    {
+      "type": "application",
+      "bom-ref": "pkg:generic/ffmpeg-bundled-cli@6.1.1-tessus",
+      "name": "FFmpeg (bundled CLI)",
+      "version": "6.1.1-tessus",
+      "purl": "pkg:generic/ffmpeg-bundled-cli@6.1.1-tessus",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "name": "GPL-3.0-or-later"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "pokit:linkage",
+          "value": "separate-process"
+        },
+        {
+          "name": "pokit:modified",
+          "value": "false"
+        },
+        {
+          "name": "pokit:shipsToCustomer",
+          "value": "true"
+        },
+        {
+          "name": "pokit:licenseClass",
+          "value": "strong-copyleft"
+        },
+        {
+          "name": "pokit:licenseEvidence",
+          "value": "compiled-in configuration string read from the shipped binary"
+        },
+        {
+          "name": "pokit:platforms",
+          "value": "darwin-x64"
+        },
+        {
+          "name": "pokit:buildConfiguration",
+          "value": "--cc=/usr/bin/clang --prefix=/opt/ffmpeg --extra-version=tessus --enable-avisynth --enable-fontconfig --enable-gpl --enable-libaom --enable-libass --enable-libbluray --enable-libdav1d --enable-libfreetype --enable-libgsm --enable-libmodplug --enable-libmp3lame --enable-libmysofa --enable-libopencore-amrnb --enable-libopencore-amrwb --enable-libopenh264 --enable-libopenjpeg --enable-libopus --enable-librubberband --enable-libshine --enable-libsnappy --enable-libsoxr --enable-libspeex --enable-libtheora --enable-libtwolame --enable-libvidstab --enable-libvmaf --enable-libvo-amrwbenc --enable-libvorbis --enable-libvpx --enable-libwebp --enable-libx264 --enable-libx265 --enable-libxavs --enable-libxml2 --enable-libxvid --enable-libzimg --enable-libzmq --enable-libzvbi --enable-version3 --pkg-config-flags=--static --disable-ffplay"
+        }
+      ],
+      "supplier": {
+        "name": "Tessus (evermeet.cx), via ffmpeg-static 5.3.0 (release tag b6.1.1)"
+      },
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://github.com/eugeneware/ffmpeg-static/releases/tag/b6.1.1"
+        }
+      ]
+    },
+    {
+      "type": "application",
+      "bom-ref": "pkg:generic/ffmpeg-bundled-cli@6.0%20(libavcodec%2060.3.100)",
+      "name": "FFmpeg (bundled CLI)",
+      "version": "6.0 (libavcodec 60.3.100)",
+      "purl": "pkg:generic/ffmpeg-bundled-cli@6.0%20(libavcodec%2060.3.100)",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "name": "GPL-3.0-or-later AND NONFREE-UNDISTRIBUTABLE"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "pokit:linkage",
+          "value": "separate-process"
+        },
+        {
+          "name": "pokit:modified",
+          "value": "false"
+        },
+        {
+          "name": "pokit:shipsToCustomer",
+          "value": "true"
+        },
+        {
+          "name": "pokit:licenseClass",
+          "value": "nonfree"
+        },
+        {
+          "name": "pokit:licenseEvidence",
+          "value": "compiled-in configuration string read from the shipped binary"
+        },
+        {
+          "name": "pokit:platforms",
+          "value": "darwin-arm64"
+        },
+        {
+          "name": "pokit:buildConfiguration",
+          "value": "--prefix=/Volumes/tempdisk/sw --extra-cflags=-fno-stack-check --arch=arm64 --cc=/usr/bin/clang --enable-gpl --enable-libvmaf --enable-libbluray --enable-libopenjpeg --enable-libopus --enable-libmp3lame --enable-libx264 --enable-libx265 --enable-libvpx --enable-libwebp --enable-libass --enable-libfreetype --enable-fontconfig --enable-libtheora --enable-libvorbis --enable-libsnappy --enable-libaom --enable-libvidstab --enable-libzimg --enable-libsvtav1 --enable-libkvazaar --enable-version3 --pkg-config-flags=--static --enable-ffplay --enable-postproc --enable-nonfree --enable-neon --enable-runtime-cpudetect --disable-indev=qtkit --disable-indev=x11grab_xcb"
+        }
+      ],
+      "supplier": {
+        "name": "third-party macOS arm64 build, via ffmpeg-static 5.3.0 (release tag b6.1.1)"
+      },
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://github.com/eugeneware/ffmpeg-static/releases/tag/b6.1.1"
+        }
+      ]
+    },
+    {
+      "type": "application",
+      "bom-ref": "pkg:generic/ffmpeg-bundled-cli@7.0.2-static",
+      "name": "FFmpeg (bundled CLI)",
+      "version": "7.0.2-static",
+      "purl": "pkg:generic/ffmpeg-bundled-cli@7.0.2-static",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "name": "GPL-3.0-or-later"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "pokit:linkage",
+          "value": "separate-process"
+        },
+        {
+          "name": "pokit:modified",
+          "value": "false"
+        },
+        {
+          "name": "pokit:shipsToCustomer",
+          "value": "true"
+        },
+        {
+          "name": "pokit:licenseClass",
+          "value": "strong-copyleft"
+        },
+        {
+          "name": "pokit:licenseEvidence",
+          "value": "compiled-in configuration string read from the shipped binary"
+        },
+        {
+          "name": "pokit:platforms",
+          "value": "linux-x64"
+        },
+        {
+          "name": "pokit:buildConfiguration",
+          "value": "--enable-gpl --enable-version3 --enable-static --disable-debug --disable-ffplay --disable-indev=sndio --disable-outdev=sndio --cc=gcc --enable-fontconfig --enable-frei0r --enable-gnutls --enable-gmp --enable-libgme --enable-gray --enable-libaom --enable-libfribidi --enable-libass --enable-libvmaf --enable-libfreetype --enable-libmp3lame --enable-libopencore-amrnb --enable-libopencore-amrwb --enable-libopenjpeg --enable-librubberband --enable-libsoxr --enable-libspeex --enable-libsrt --enable-libvorbis --enable-libopus --enable-libtheora --enable-libvidstab --enable-libvo-amrwbenc --enable-libvpx --enable-libwebp --enable-libx264 --enable-libx265 --enable-libxml2 --enable-libdav1d --enable-libxvid --enable-libzvbi --enable-libzimg"
+        }
+      ],
+      "supplier": {
+        "name": "John Van Sickle, via ffmpeg-static 5.3.0 (release tag b6.1.1)"
+      },
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://johnvansickle.com/ffmpeg/"
+        }
+      ]
+    },
+    {
+      "type": "application",
+      "bom-ref": "pkg:generic/ffprobe-bundled-cli@4.0.2%20(libavcodec%2058.18.100)",
+      "name": "ffprobe (bundled CLI)",
+      "version": "4.0.2 (libavcodec 58.18.100)",
+      "purl": "pkg:generic/ffprobe-bundled-cli@4.0.2%20(libavcodec%2058.18.100)",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "name": "GPL-3.0-or-later"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "pokit:linkage",
+          "value": "separate-process"
+        },
+        {
+          "name": "pokit:modified",
+          "value": "false"
+        },
+        {
+          "name": "pokit:shipsToCustomer",
+          "value": "true"
+        },
+        {
+          "name": "pokit:licenseClass",
+          "value": "strong-copyleft"
+        },
+        {
+          "name": "pokit:licenseEvidence",
+          "value": "compiled-in configuration string read from the shipped binary"
+        },
+        {
+          "name": "pokit:platforms",
+          "value": "win32-x64,win32-ia32,linux-x64,linux-ia32,darwin-x64"
+        },
+        {
+          "name": "pokit:buildConfiguration",
+          "value": "--enable-gpl --enable-version3 --enable-static --enable-libx264 --enable-libx265 --enable-libxvid --enable-librubberband --enable-frei0r (full string varies per platform; see generator evidence)"
+        },
+        {
+          "name": "pokit:declaredLicenseIsWrong",
+          "value": "package manager reports MIT; actual is GPL-3.0-or-later"
+        }
+      ],
+      "supplier": {
+        "name": "ffprobe-static 3.1.0 (vendored binaries)"
+      },
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://github.com/joshwnj/ffprobe-static"
+        }
+      ]
+    },
+    {
+      "type": "application",
+      "bom-ref": "pkg:generic/ffprobe-bundled-cli@4.4%20(libavcodec%2058.134.100)%2C%20Tessus%20build",
+      "name": "ffprobe (bundled CLI)",
+      "version": "4.4 (libavcodec 58.134.100), Tessus build",
+      "purl": "pkg:generic/ffprobe-bundled-cli@4.4%20(libavcodec%2058.134.100)%2C%20Tessus%20build",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "name": "GPL-3.0-or-later"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "pokit:linkage",
+          "value": "separate-process"
+        },
+        {
+          "name": "pokit:modified",
+          "value": "false"
+        },
+        {
+          "name": "pokit:shipsToCustomer",
+          "value": "true"
+        },
+        {
+          "name": "pokit:licenseClass",
+          "value": "strong-copyleft"
+        },
+        {
+          "name": "pokit:licenseEvidence",
+          "value": "compiled-in configuration string read from the shipped binary"
+        },
+        {
+          "name": "pokit:platforms",
+          "value": "darwin-arm64"
+        },
+        {
+          "name": "pokit:buildConfiguration",
+          "value": "--cc=/usr/bin/clang --prefix=/opt/ffmpeg --extra-version=tessus --enable-avisynth --enable-fontconfig --enable-gpl --enable-libaom --enable-libass --enable-libbluray --enable-libdav1d --enable-libfreetype --enable-libgsm --enable-libmodplug --enable-libmp3lame --enable-libmysofa --enable-libopencore-amrnb --enable-libopencore-amrwb --enable-libopenh264 --enable-libopenjpeg --enable-libopus --enable-librubberband --enable-libshine --enable-libsnappy --enable-libsoxr --enable-libspeex --enable-libtheora --enable-libtwolame --enable-libvidstab --enable-libvmaf --enable-libvo-amrwbenc --enable-libvorbis --enable-libvpx --enable-libwebp --enable-libx264 --enable-libx265 --enable-libxavs --enable-libxvid --enable-libzimg --enable-libzmq --enable-libzvbi --enable-version3 --pkg-config-flags=--static --disable-ffplay"
+        }
+      ],
+      "supplier": {
+        "name": "ffprobe-static 3.1.0 (vendored binaries)"
+      },
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://github.com/joshwnj/ffprobe-static"
+        }
+      ]
+    }
+  ]
+}
