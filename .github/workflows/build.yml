@@ -131,6 +131,65 @@ jobs:
             echo "warns on first launch."
           fi
 
+      # Prove the certificate secrets are actually usable BEFORE building.
+      # electron-builder's message for a wrong .p12 password is buried in a
+      # very long log, and reading that log needs admin rights on the repo —
+      # a dedicated step that fails, plus an error annotation, is visible to
+      # everyone.
+      - name: Preflight signing certificate
+        if: matrix.os == 'macos-latest'
+        shell: bash
+        env:
+          CERT_B64: ${{ secrets.MAC_CSC_LINK }}
+          CERT_PW: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+        run: |
+          set -uo pipefail
+          if [[ -z "$CERT_B64" ]]; then
+            echo "No certificate configured — nothing to preflight."
+            exit 0
+          fi
+
+          p12="$RUNNER_TEMP/preflight.p12"
+          # openssl rather than base64(1): the BSD and GNU flags for decoding
+          # differ, and -A tolerates the single unwrapped line pbcopy produces.
+          if ! printf '%s' "$CERT_B64" | openssl base64 -d -A > "$p12" 2>/dev/null; then
+            echo "::error title=MAC_CSC_LINK is not valid base64::Re-copy it with: base64 -i <cert>.p12 | tr -d '\\n' | pbcopy"
+            exit 1
+          fi
+          # openssl base64 -d silently SKIPS invalid characters rather than
+          # failing, so a mangled secret decodes to a near-empty file. Check
+          # the size, or the misleading "wrong password" branch below fires.
+          size=$(wc -c < "$p12" | tr -d ' ')
+          echo "decoded certificate: $size bytes"
+          if [[ "$size" -lt 500 ]]; then
+            echo "::error title=MAC_CSC_LINK did not decode to a certificate::Decoded to only $size bytes, so the secret is truncated or is not base64. Re-copy the whole thing with: base64 -i <cert>.p12 | tr -d '\\n' | pbcopy"
+            exit 1
+          fi
+
+          # A THROWAWAY keychain, never added to the search list, so this
+          # cannot disturb electron-builder's own keychain work in Build.
+          kc="$RUNNER_TEMP/preflight.keychain"
+          security create-keychain -p preflight "$kc"
+          security unlock-keychain -p preflight "$kc"
+
+          if ! security import "$p12" -k "$kc" -P "$CERT_PW" -T /usr/bin/codesign >/dev/null 2>&1; then
+            echo "::error title=Signing certificate could not be imported::MAC_CSC_KEY_PASSWORD is wrong, or the .p12 was exported without its private key. Re-export from Keychain Access under My Certificates."
+            security delete-keychain "$kc" || true
+            exit 1
+          fi
+
+          ids=$(security find-identity -v -p codesigning "$kc" || true)
+          echo "$ids"
+          if ! grep -q 'Developer ID Application' <<<"$ids"; then
+            echo "::error title=No Developer ID Application identity in the .p12::It imported, but carries no Developer ID Application identity. Export the certificate itself (with its private key) from Keychain Access under My Certificates."
+            security delete-keychain "$kc" || true
+            exit 1
+          fi
+
+          echo "Certificate and password are valid."
+          security delete-keychain "$kc"
+          rm -f "$p12"
+
       # On a version tag, publish straight to a GitHub Release — that Release
       # is the update feed electron-updater polls on installed desktops.
       # On any other trigger (push to main, PR), build only, never publish.
@@ -145,10 +204,39 @@ jobs:
           if [[ -z "${CSC_LINK:-}" ]]; then unset CSC_LINK CSC_KEY_PASSWORD; fi
           if [[ -z "${APPLE_ID:-}" ]]; then unset APPLE_ID APPLE_ID_PASSWORD APPLE_TEAM_ID; fi
 
+          # Every secret above is macOS-only — note the MAC_ prefix on the repo
+          # secret names. But electron-builder reads CSC_LINK on WINDOWS too and
+          # treats it as a Windows signing certificate, so once MAC_CSC_LINK
+          # existed the Windows job started trying to sign an .exe with an Apple
+          # Developer ID cert and failed. Drop them entirely off macOS.
+          if [[ "${RUNNER_OS:-}" != "macOS" ]]; then
+            unset CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_ID_PASSWORD APPLE_TEAM_ID
+          fi
+
+          # Capture the build output so a failure can be reported as a workflow
+          # ERROR ANNOTATION below. Annotations are readable over the public
+          # API, whereas downloading Actions LOGS needs admin rights on the
+          # repo — without this, a failed build is opaque to anyone with only
+          # read access.
+          log="$RUNNER_TEMP/electron-builder.log"
+          rc=0
           if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
-            npx electron-builder ${{ matrix.platformFlag }} --publish always
+            npx electron-builder ${{ matrix.platformFlag }} --publish always 2>&1 | tee "$log" || rc=${PIPESTATUS[0]}
           else
-            npx electron-builder ${{ matrix.platformFlag }} --publish never
+            npx electron-builder ${{ matrix.platformFlag }} --publish never 2>&1 | tee "$log" || rc=${PIPESTATUS[0]}
+          fi
+
+          if [[ "$rc" != "0" ]]; then
+            # Newlines and % have to be percent-escaped inside a workflow
+            # command. GitHub redacts registered secrets from annotations, and
+            # only error-shaped lines are forwarded.
+            msg=$(grep -iE 'error|cannot|failed|invalid|denied|no identity|identity|notariz|password' "$log" \
+                    | grep -viE 'warning|deprecat|npm notice' \
+                    | tail -12 \
+                    | sed -e 's/%/%25/g' \
+                    | awk 'BEGIN{ORS="%0A"}{print}' || true)
+            echo "::error title=electron-builder ${{ matrix.platformFlag }} failed::${msg:-no error-shaped lines found; see the job log}"
+            exit "$rc"
           fi
         env:
           # Windows has no certificate configured, so keep auto-discovery off
