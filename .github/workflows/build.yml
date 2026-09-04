@@ -395,12 +395,18 @@ jobs:
             # Newlines and % have to be percent-escaped inside a workflow
             # command. GitHub redacts registered secrets from annotations, and
             # only error-shaped lines are forwarded.
-            msg=$(grep -iE 'error|cannot|failed|invalid|denied|no identity|identity|notariz|password' "$log" \
-                    | grep -viE 'warning|deprecat|npm notice' \
-                    | tail -12 \
-                    | sed -e 's/%/%25/g' \
-                    | awk 'BEGIN{ORS="%0A"}{print}' || true)
-            echo "::error title=electron-builder ${{ matrix.platformFlag }} failed::${msg:-no error-shaped lines found; see the job log}"
+            esc() { sed -e 's/%/%25/g' | awk 'BEGIN{ORS="%0A"}{print}'; }
+
+            hits=$(grep -iE 'error|cannot|failed|invalid|denied|identity|notariz|password|ENOSPC|no space|killed|signal|Exit code' "$log" \
+                     | grep -viE 'warning|deprecat|npm notice' \
+                     | tail -12 | esc || true)
+            # ALWAYS include the tail as well. Filtering alone once produced
+            # "no error-shaped lines found", which says nothing at all — and
+            # the log itself needs repo admin to read.
+            tailed=$(tail -30 "$log" | esc || true)
+            bytes=$(wc -c < "$log" | tr -d ' ')
+
+            echo "::error title=electron-builder ${{ matrix.platformFlag }} failed::exit=$rc logbytes=$bytes%0A-- matched --%0A${hits:-<none>}%0A-- last 30 lines --%0A${tailed:-<log empty>}"
             exit "$rc"
           fi
         env:
