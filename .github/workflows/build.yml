@@ -326,7 +326,12 @@ jobs:
 
           ids=$(security find-identity -v -p codesigning "$kc" || true)
           echo "$ids"
-          name=$(sed -n 's/.*"\(Developer ID Application:.*\)"/\1/p' <<<"$ids" | head -1)
+          # electron-builder REJECTS a CSC_NAME carrying the type prefix:
+          #   "Please remove prefix \"Developer ID Application:\" from the
+          #    specified name - appropriate certificate will be chosen
+          #    automatically"
+          # so capture only what follows it, e.g. "Sean Hart (K4CS2B8K3U)".
+          name=$(sed -n 's/.*"Developer ID Application: \(.*\)"/\1/p' <<<"$ids" | head -1)
           if [[ -z "$name" ]]; then
             # -v lists only identities that CHAIN to a trusted root. Separate
             # "the key is missing" from "the key is here but Apple's
