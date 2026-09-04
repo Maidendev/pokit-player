@@ -131,64 +131,106 @@ jobs:
             echo "warns on first launch."
           fi
 
-      # Prove the certificate secrets are actually usable BEFORE building.
-      # electron-builder's message for a wrong .p12 password is buried in a
-      # very long log, and reading that log needs admin rights on the repo —
-      # a dedicated step that fails, plus an error annotation, is visible to
-      # everyone.
-      - name: Preflight signing certificate
+      # Prove EVERY signing credential is usable before building. Two reasons
+      # this is a step of its own rather than trust in the build:
+      #   - electron-builder's message for a bad .p12 password is buried in a
+      #     very long log, and downloading Actions logs needs admin rights on
+      #     the repo, so a plain failure tells a read-only user nothing.
+      #   - scripts/notarize.js deliberately SWALLOWS its own errors so that
+      #     unsigned dev builds still finish. A wrong app-specific password
+      #     would therefore produce a green, un-notarized build that warns on
+      #     every user's Mac.
+      # Both checks run every time and report through error annotations, which
+      # ARE readable over the public API, so one run surfaces every problem.
+      - name: Preflight signing and notarization credentials
         if: matrix.os == 'macos-latest'
         shell: bash
         env:
           CERT_B64: ${{ secrets.MAC_CSC_LINK }}
           CERT_PW: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -uo pipefail
+          fail=0
+
+          check_certificate() {
+            local p12="$RUNNER_TEMP/preflight.p12"
+            # openssl rather than base64(1): the BSD and GNU decode flags
+            # differ, and -A tolerates the single unwrapped line pbcopy makes.
+            if ! printf '%s' "$CERT_B64" | openssl base64 -d -A > "$p12" 2>/dev/null; then
+              echo "::error title=MAC_CSC_LINK is not valid base64::Re-copy it with: base64 -i <cert>.p12 | tr -d '\\n' | pbcopy"
+              return 1
+            fi
+            # openssl base64 -d SKIPS invalid characters instead of failing, so
+            # a mangled secret decodes to a near-empty file. Check the size, or
+            # the misleading "wrong password" branch below fires instead.
+            local size
+            size=$(wc -c < "$p12" | tr -d ' ')
+            echo "  decoded certificate: $size bytes"
+            if [[ "$size" -lt 500 ]]; then
+              echo "::error title=MAC_CSC_LINK did not decode to a certificate::Decoded to only $size bytes, so the secret is empty or truncated. Copy the WHOLE value with: base64 -i <cert>.p12 | tr -d '\\n' | pbcopy"
+              return 1
+            fi
+
+            # A THROWAWAY keychain, never added to the search list, so this
+            # cannot disturb electron-builder's own keychain work in Build.
+            local kc="$RUNNER_TEMP/preflight.keychain"
+            security create-keychain -p preflight "$kc"
+            security unlock-keychain -p preflight "$kc"
+            local rc=0
+            if ! security import "$p12" -k "$kc" -P "$CERT_PW" -T /usr/bin/codesign >/dev/null 2>&1; then
+              echo "::error title=Signing certificate could not be imported::MAC_CSC_KEY_PASSWORD is wrong, or the .p12 was exported without its private key. Re-export from Keychain Access under My Certificates."
+              rc=1
+            else
+              local ids
+              ids=$(security find-identity -v -p codesigning "$kc" || true)
+              echo "$ids" | sed 's/^/  /'
+              if ! grep -q 'Developer ID Application' <<<"$ids"; then
+                echo "::error title=No Developer ID Application identity in the .p12::It imported, but carries no Developer ID Application identity. Export the certificate itself, with its private key, from Keychain Access under My Certificates."
+                rc=1
+              fi
+            fi
+            security delete-keychain "$kc" || true
+            rm -f "$p12"
+            return "$rc"
+          }
+
+          check_notarization() {
+            # `notarytool history` authenticates without submitting anything,
+            # so it validates the credentials in seconds.
+            local out rc=0
+            out=$(xcrun notarytool history \
+                    --apple-id "$APPLE_ID" \
+                    --password "$APPLE_ID_PASSWORD" \
+                    --team-id "$APPLE_TEAM_ID" 2>&1) || rc=$?
+            if [[ "$rc" != "0" ]]; then
+              local reason
+              reason=$(grep -iE 'error|unable|invalid|incorrect|forbidden|not found|401|403' <<<"$out" \
+                         | head -3 | sed -e 's/%/%25/g' | awk 'BEGIN{ORS="%0A"}{print}')
+              echo "::error title=Apple rejected the notarization credentials::${reason:-notarytool exited $rc}%0AAPPLE_ID_PASSWORD must be an APP-SPECIFIC password from appleid.apple.com, not the account password. APPLE_TEAM_ID must be the 10-character team id."
+              return 1
+            fi
+            return 0
+          }
+
+          echo "=== signing certificate ==="
           if [[ -z "$CERT_B64" ]]; then
-            echo "No certificate configured — nothing to preflight."
-            exit 0
+            echo "  not configured — this build will be UNSIGNED"
+          else
+            check_certificate || fail=1
           fi
 
-          p12="$RUNNER_TEMP/preflight.p12"
-          # openssl rather than base64(1): the BSD and GNU flags for decoding
-          # differ, and -A tolerates the single unwrapped line pbcopy produces.
-          if ! printf '%s' "$CERT_B64" | openssl base64 -d -A > "$p12" 2>/dev/null; then
-            echo "::error title=MAC_CSC_LINK is not valid base64::Re-copy it with: base64 -i <cert>.p12 | tr -d '\\n' | pbcopy"
-            exit 1
-          fi
-          # openssl base64 -d silently SKIPS invalid characters rather than
-          # failing, so a mangled secret decodes to a near-empty file. Check
-          # the size, or the misleading "wrong password" branch below fires.
-          size=$(wc -c < "$p12" | tr -d ' ')
-          echo "decoded certificate: $size bytes"
-          if [[ "$size" -lt 500 ]]; then
-            echo "::error title=MAC_CSC_LINK did not decode to a certificate::Decoded to only $size bytes, so the secret is truncated or is not base64. Re-copy the whole thing with: base64 -i <cert>.p12 | tr -d '\\n' | pbcopy"
-            exit 1
+          echo "=== notarization credentials ==="
+          if [[ -z "$APPLE_ID" || -z "$APPLE_ID_PASSWORD" || -z "$APPLE_TEAM_ID" ]]; then
+            echo "  not fully configured — this build will NOT be notarized"
+          else
+            check_notarization && echo "  accepted by Apple" || fail=1
           fi
 
-          # A THROWAWAY keychain, never added to the search list, so this
-          # cannot disturb electron-builder's own keychain work in Build.
-          kc="$RUNNER_TEMP/preflight.keychain"
-          security create-keychain -p preflight "$kc"
-          security unlock-keychain -p preflight "$kc"
-
-          if ! security import "$p12" -k "$kc" -P "$CERT_PW" -T /usr/bin/codesign >/dev/null 2>&1; then
-            echo "::error title=Signing certificate could not be imported::MAC_CSC_KEY_PASSWORD is wrong, or the .p12 was exported without its private key. Re-export from Keychain Access under My Certificates."
-            security delete-keychain "$kc" || true
-            exit 1
-          fi
-
-          ids=$(security find-identity -v -p codesigning "$kc" || true)
-          echo "$ids"
-          if ! grep -q 'Developer ID Application' <<<"$ids"; then
-            echo "::error title=No Developer ID Application identity in the .p12::It imported, but carries no Developer ID Application identity. Export the certificate itself (with its private key) from Keychain Access under My Certificates."
-            security delete-keychain "$kc" || true
-            exit 1
-          fi
-
-          echo "Certificate and password are valid."
-          security delete-keychain "$kc"
-          rm -f "$p12"
+          [[ "$fail" == "0" ]] || { echo "Preflight FAILED — see the annotations above."; exit 1; }
+          echo "Preflight passed."
 
       # On a version tag, publish straight to a GitHub Release — that Release
       # is the update feed electron-updater polls on installed desktops.
