@@ -62,13 +62,24 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p src/bin
+          # install.js writes to a FIXED path — node_modules/ffmpeg-static/ffmpeg
+          # — regardless of arch; npm_config_arch only picks the download URL.
+          # It also short-circuits with "ffmpeg is installed already" when that
+          # path exists, and `npm install` above has already put the RUNNER's
+          # arch there. So the override was silently ignored and both copies
+          # came out arm64. Delete the file before each fetch, and call
+          # install.js directly so the env override cannot be dropped by npm's
+          # config forwarding.
           for arch in x64 arm64; do
             echo "==> Fetching darwin/${arch} ffmpeg"
+            rm -f node_modules/ffmpeg-static/ffmpeg
             npm_config_platform=darwin npm_config_arch="$arch" \
-              npm rebuild ffmpeg-static --foreground-scripts
+              node node_modules/ffmpeg-static/install.js
             cp node_modules/ffmpeg-static/ffmpeg "src/bin/ffmpeg-darwin-${arch}"
             chmod +x "src/bin/ffmpeg-darwin-${arch}"
           done
+          # arm64 ran last, so node_modules/ffmpeg-static/ffmpeg holds the
+          # runner's own arch — the same state a plain `npm install` leaves.
           # Verify each binary is really the arch it claims. A silent fallback
           # to the host arch here is exactly the bug this step exists to stop.
           for arch in x64 arm64; do
