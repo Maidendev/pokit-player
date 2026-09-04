@@ -155,6 +155,47 @@ jobs:
           set -uo pipefail
           fail=0
 
+          # ---------------------------------------------------------------
+          # Report the SHAPE of each secret, never its value: length, how
+          # many characters are legal base64, how much is whitespace, and
+          # whether it matches the format Apple requires. That is enough to
+          # identify a truncated paste, a value saved into the wrong secret,
+          # or an account password used where an app-specific one belongs —
+          # without disclosing anything usable. It goes out as a WARNING
+          # annotation because annotations are readable over the public API
+          # while Actions logs need admin rights on the repo.
+          # ---------------------------------------------------------------
+          shape() {  # <label> <value>
+            local label="$1" v="$2" n b64 ws
+            n=${#v}
+            b64=$(printf '%s' "$v" | tr -cd 'A-Za-z0-9+/=' | wc -c | tr -d ' ')
+            ws=$(printf '%s' "$v" | tr -cd ' \t\n\r' | wc -c | tr -d ' ')
+            printf '%s: len=%s b64chars=%s whitespace=%s' "$label" "$n" "$b64" "$ws"
+          }
+
+          shapes="$(shape MAC_CSC_LINK "$CERT_B64")"
+          shapes="$shapes%0A$(shape MAC_CSC_KEY_PASSWORD "$CERT_PW")"
+          shapes="$shapes%0A$(shape APPLE_ID "$APPLE_ID")"
+          shapes="$shapes%0A$(shape APPLE_ID_PASSWORD "$APPLE_ID_PASSWORD")"
+          shapes="$shapes%0A$(shape APPLE_TEAM_ID "$APPLE_TEAM_ID")"
+
+          if [[ "$APPLE_ID" == *@* ]]; then
+            shapes="$shapes%0AAPPLE_ID contains @ (looks like an Apple ID)"
+          else
+            shapes="$shapes%0AAPPLE_ID has NO @ — that is not an Apple ID"
+          fi
+          if [[ "$APPLE_ID_PASSWORD" =~ ^[a-zA-Z]{4}-[a-zA-Z]{4}-[a-zA-Z]{4}-[a-zA-Z]{4}$ ]]; then
+            shapes="$shapes%0AAPPLE_ID_PASSWORD matches Apple's xxxx-xxxx-xxxx-xxxx format"
+          else
+            shapes="$shapes%0AAPPLE_ID_PASSWORD does NOT match xxxx-xxxx-xxxx-xxxx (19 chars, 3 hyphens)"
+          fi
+          if [[ "$APPLE_TEAM_ID" =~ ^[A-Z0-9]{10}$ ]]; then
+            shapes="$shapes%0AAPPLE_TEAM_ID is 10 uppercase alphanumerics"
+          else
+            shapes="$shapes%0AAPPLE_TEAM_ID is NOT 10 uppercase alphanumerics"
+          fi
+          echo "::warning title=Signing secret shapes (no values shown)::$shapes"
+
           check_certificate() {
             local p12="$RUNNER_TEMP/preflight.p12"
             # openssl rather than base64(1): the BSD and GNU decode flags
