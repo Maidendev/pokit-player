@@ -182,6 +182,14 @@ jobs:
       - name: Verify Intel + Apple Silicon builds
         if: runner.os == 'macOS'
         shell: bash
+        # Whether signing / notarization was CONFIGURED for this run. When it
+        # was, a build that comes out unsigned or unstapled must FAIL the job
+        # rather than just print a note: downloading Actions logs needs admin
+        # rights on the repo, so for anyone without them the step conclusion
+        # is the only visible signal. Only emptiness of each secret is tested.
+        env:
+          SIGNING_EXPECTED: ${{ secrets.MAC_CSC_LINK != '' && secrets.MAC_CSC_KEY_PASSWORD != '' }}
+          NOTARIZE_EXPECTED: ${{ secrets.MAC_CSC_LINK != '' && secrets.APPLE_ID != '' && secrets.APPLE_ID_PASSWORD != '' && secrets.APPLE_TEAM_ID != '' }}
         run: |
           set -euo pipefail
           echo "=== dist ==="
@@ -201,13 +209,39 @@ jobs:
             # The bundled ffmpeg must match too — this is the one that silently
             # ships wrong and only fails at transcode time.
             local ff
-            ff=$(find "$app" -name 'ffmpeg-darwin-*' -o -name 'ffmpeg' -type f 2>/dev/null | head -1)
+            # -type f has to apply to BOTH -name branches, hence the parens.
+            # `|| true` because head closing the pipe early can SIGPIPE find,
+            # and pipefail would then abort the whole step.
+            ff=$(find "$app" \( -name 'ffmpeg-darwin-*' -o -name 'ffmpeg' \) -type f 2>/dev/null | head -1) || true
             if [[ -n "$ff" ]]; then
               echo "    ffmpeg     : $(lipo -archs "$ff")  ($(basename "$ff"))"
             fi
-            # Signature + notarization ticket. Only meaningful once secrets exist.
-            codesign -dv --verbose=2 "$app" 2>&1 | grep -E 'Authority|TeamIdentifier|flags' || true
-            spctl -a -vvv -t exec "$app" 2>&1 | head -3 || true
+
+            # --- Signature ---------------------------------------------------
+            local sig
+            sig=$(codesign -dv --verbose=2 "$app" 2>&1) || true
+            grep -E 'Authority|TeamIdentifier|Timestamp|flags' <<<"$sig" | sed 's/^/    /' || true
+            codesign --verify --deep --strict "$app" 2>&1 | tail -2 | sed 's/^/    verify: /' || true
+            if [[ "${SIGNING_EXPECTED:-false}" == "true" ]]; then
+              grep -q 'Authority=Developer ID Application' <<<"$sig" || {
+                echo "    ERROR: a certificate was configured, but this app is"
+                echo "           NOT signed with a Developer ID Application cert."
+                fail=1; }
+            fi
+
+            # --- Notarization ticket ----------------------------------------
+            # Without a STAPLED ticket the app still warns on first launch on
+            # a machine that has never seen it, so assert the stapled state,
+            # not merely that Gatekeeper accepts it.
+            local gate
+            gate=$(spctl -a -vvv -t exec "$app" 2>&1) || true
+            head -3 <<<"$gate" | sed 's/^/    /' || true
+            if [[ "${NOTARIZE_EXPECTED:-false}" == "true" ]]; then
+              grep -q 'source=Notarized Developer ID' <<<"$gate" || {
+                echo "    ERROR: notarization was configured, but no stapled"
+                echo "           ticket is present — Gatekeeper will still warn."
+                fail=1; }
+            fi
           }
 
           check "dist/mac/MaidenPlayer.app"       x86_64 "Intel (x64)"
