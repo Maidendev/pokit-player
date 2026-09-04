@@ -285,13 +285,21 @@ jobs:
       # Build so it skips its own broken path and signs with what is already
       # in the keychain.
       - name: Install signing certificate into the build keychain
-        if: matrix.os == 'macos-latest' && secrets.MAC_CSC_LINK != ''
+        # NOTE: the `secrets` context is NOT permitted in a step-level `if` —
+        # GitHub rejects the whole workflow file, and the run fails instantly
+        # with no jobs at all. Gate on the value inside the script instead.
+        if: matrix.os == 'macos-latest'
         shell: bash
         env:
           CERT_B64: ${{ secrets.MAC_CSC_LINK }}
           CERT_PW: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
         run: |
           set -euo pipefail
+          if [[ -z "$CERT_B64" ]]; then
+            echo "No certificate configured — leaving this build unsigned."
+            exit 0
+          fi
+
           p12="$RUNNER_TEMP/signing.p12"
           kc="$RUNNER_TEMP/build.keychain"
           kcpw="$(openssl rand -hex 24)"
