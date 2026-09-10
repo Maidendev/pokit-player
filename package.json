@@ -164,7 +164,7 @@
       ],
       "category": "Video",
       "desktop": {
-        "MimeType": "video/mp4;video/webm;video/x-matroska;video/avi;video/quicktime;video/x-m4v;video/x-flv;video/x-ms-wmv;video/mpeg;application/mxf;image/x-dpx;image/x-exr;image/tiff"
+        "MimeType": "video/mp4;video/webm;video/x-matroska;video/avi;video/quicktime;video/x-m4v;video/x-flv;video/x-ms-wmv;video/mpeg;application/mxf;image/x-dpx;image/x-exr;image/tiff;video/x-blackmagic-raw"
       }
     },
     "fileAssociations": [
@@ -285,6 +285,14 @@
         "name": "TIFF Image",
         "description": "TIFF Image File",
         "mimeType": "image/tiff",
+        "role": "Viewer",
+        "icon": "src/assets/icon.ico"
+      },
+      {
+        "ext": "braw",
+        "name": "Blackmagic RAW",
+        "description": "Blackmagic RAW Video File",
+        "mimeType": "video/x-blackmagic-raw",
         "role": "Viewer",
         "icon": "src/assets/icon.ico"
       }

@@ -18,10 +18,14 @@
 
 const { spawn } = require('child_process');
 const { FFMPEG } = require('./transcoder');
+const braw = require('./braw');
 
 class StreamDecoder {
   constructor() {
     this.process = null;
+    // Upstream frame source for formats FFmpeg cannot open at all. Only .braw
+    // uses it today: braw-decode writes raw frames into ffmpeg's stdin.
+    this.preProcess = null;
     this.active = false;
     this.filePath = null;
     this.probeInfo = null;
@@ -74,19 +78,40 @@ class StreamDecoder {
     this.probeInfo = probeInfo;
     this.active = true;
 
-    const hasAudio = !!(probeInfo.audioCodec);
+    const isBraw = !!probeInfo.isBraw;
+
+    // BRAW audio is not wired up yet. The helper has to finish writing the
+    // clip's PCM to a file before FFmpeg can take it as a second input, and
+    // that pre-pass has to complete before frame decoding starts — which
+    // start() being synchronous does not allow. Video first; audio needs a
+    // wider change than this path.
+    const hasAudio = isBraw ? false : !!(probeInfo.audioCodec);
     const duration = probeInfo.duration || 0;
 
     // Build ffmpeg arguments
     const args = [];
 
-    // Seek position (before input for fast seek)
-    if (seekTime > 0) {
-      args.push('-ss', String(seekTime));
-    }
+    if (isBraw) {
+      // FFmpeg never opens the .braw here — it reads headerless frames from
+      // the helper on stdin. Nothing about them can be inferred, so geometry,
+      // pixel format and rate all have to be declared up front.
+      args.push(
+        '-f', 'rawvideo',
+        '-pixel_format', probeInfo.brawPixelFormat || braw.DEFAULT_PIXEL_FORMAT,
+        '-video_size', (probeInfo.width || 0) + 'x' + (probeInfo.height || 0),
+        // Exact rational rate, so 23.976 does not drift the way 23.98 would.
+        '-framerate', probeInfo.brawFrameRateRational || String(probeInfo.fps || 24),
+        '-i', 'pipe:0'
+      );
+    } else {
+      // Seek position (before input for fast seek)
+      if (seekTime > 0) {
+        args.push('-ss', String(seekTime));
+      }
 
-    // Input
-    args.push('-i', filePath);
+      // Input
+      args.push('-i', filePath);
+    }
 
     // Video encoding: H.264 ultrafast for speed, High profile for MSE compat
     args.push(
@@ -151,7 +176,7 @@ class StreamDecoder {
     try {
       this.process = spawn(FFMPEG, args, {
         windowsHide: true,
-        stdio: ['ignore', 'pipe', 'pipe'],
+        stdio: [isBraw ? 'pipe' : 'ignore', 'pipe', 'pipe'],
       });
       this.flowPaused = false;   // fresh process starts flowing
     } catch (err) {
@@ -159,6 +184,10 @@ class StreamDecoder {
       this.active = false;
       if (this.onError) this.onError('Failed to start ffmpeg: ' + err.message);
       return;
+    }
+
+    if (isBraw && !this.startBrawSource(filePath, probeInfo, seekTime)) {
+      return;   // startBrawSource has already reported and torn down
     }
 
     // Read fMP4 data from stdout
@@ -206,10 +235,74 @@ class StreamDecoder {
   }
 
   /**
+   * Start braw-decode and pipe its frames into the ffmpeg we just spawned.
+   *
+   * Seeking is by FRAME here, not by time: rawvideo carries no timestamps for
+   * `-ss` to act on, so the helper is told where to begin instead.
+   *
+   * @returns {boolean} false if it could not start (already reported).
+   */
+  startBrawSource(filePath, probeInfo, seekTime) {
+    const fps = probeInfo.fps || 0;
+    const startFrame = seekTime > 0 && fps > 0 ? Math.round(seekTime * fps) : 0;
+
+    try {
+      this.preProcess = braw.spawnFrames(filePath, { startFrame });
+    } catch (err) {
+      console.error('[StreamDecoder] braw-decode spawn error:', err.message);
+      this.stop();
+      if (this.onError) this.onError(err.message);
+      return false;
+    }
+
+    this.preProcess.stdout.pipe(this.process.stdin);
+
+    // EPIPE is expected every time we stop or seek: ffmpeg dies first and the
+    // helper is still mid-write. Swallow it, or it surfaces as a crash.
+    this.process.stdin.on('error', (err) => {
+      if (err && err.code !== 'EPIPE') {
+        console.error('[StreamDecoder] ffmpeg stdin error:', err.message);
+      }
+    });
+
+    this.preProcess.stderr.on('data', (d) => {
+      console.log('[Braw] ' + d.toString().trimEnd());
+    });
+
+    this.preProcess.on('error', (err) => {
+      if (!this.active) return;
+      console.error('[StreamDecoder] braw-decode error:', err.message);
+      this.stop();
+      if (this.onError) this.onError('Blackmagic RAW decoder failed: ' + err.message);
+    });
+
+    this.preProcess.on('close', (code) => {
+      // A non-zero exit only matters while we still expect frames — killing
+      // the helper on stop() or seek() is the normal case.
+      if (this.active && code !== 0 && code !== null) {
+        console.error('[StreamDecoder] braw-decode exited with code:', code);
+      }
+    });
+
+    return true;
+  }
+
+  /**
    * Stop the current decode process.
    */
   stop() {
     this.active = false;
+    if (this.preProcess) {
+      console.log('[StreamDecoder] Stopping braw-decode');
+      try {
+        this.preProcess.stdout.unpipe();
+        this.preProcess.stdout.removeAllListeners();
+        this.preProcess.stderr.removeAllListeners();
+        this.preProcess.removeAllListeners();
+        this.preProcess.kill('SIGKILL');
+      } catch (_) { /* ignore */ }
+      this.preProcess = null;
+    }
     if (this.process) {
       console.log('[StreamDecoder] Stopping process');
       try {

@@ -60,3 +60,11 @@ yarn-error.log*
 
 # Local test media — large binaries, not part of the app
 FOOTAGE/
+
+# ── Blackmagic RAW SDK (vendored, not redistributable via git) ──
+# Download it from Blackmagic and unpack into native/braw-decode/sdk/.
+# See native/braw-decode/README.md.
+native/braw-decode/sdk/
+native/braw-decode/build/
+src/bin/braw-decode
+src/bin/braw-decode.exe

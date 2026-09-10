@@ -6,6 +6,7 @@ const inspector = require('./inspector');
 const loudness = require('./loudness');
 const captions = require('./captions');
 const { StreamDecoder } = require('./stream-decoder');
+const braw = require('./braw');
 const { autoUpdater } = require('electron-updater');
 
 let mainWindow = null;
@@ -20,6 +21,9 @@ const VIDEO_EXTENSIONS = [
   // routed through the stream decoder rather than the <video> element.
   '.ts', '.m2ts', '.mts', '.m2v', '.mpv', '.vob', '.gxf', '.asf', '.mj2',
   '.3gp', '.3g2',
+  // Blackmagic RAW. Unlike everything above it, FFmpeg cannot open this at
+  // all, so it is probed and decoded through src/braw.js instead.
+  ...braw.BRAW_EXTENSIONS,
 ];
 const IMAGE_SEQ_EXTENSIONS = transcoder.IMAGE_SEQ_EXTENSIONS; // .dpx .exr .tif .tiff .png .jpg .jpeg
 const ALL_EXTENSIONS = [...VIDEO_EXTENSIONS, ...IMAGE_SEQ_EXTENSIONS];
@@ -348,7 +352,7 @@ async function openFileDialog() {
           'mp4', 'webm', 'mkv', 'avi', 'mov', 'm4v', 'ogv', 'ogg',
           'flv', 'wmv', 'mpg', 'mpeg', 'mxf',
           'ts', 'm2ts', 'mts', 'm2v', 'mpv', 'vob', 'gxf', 'asf', 'mj2',
-          '3gp', '3g2',
+          '3gp', '3g2', 'braw',
         ],
       },
       {
@@ -415,6 +419,14 @@ ipcMain.handle('get-file-stats', async (_event, filePath) => {
 ipcMain.handle('probe-file', async (_event, filePath) => {
   console.log('[Main] IPC: probe-file', filePath);
   try {
+    // .braw has no FFmpeg demuxer — probing it with ffmpeg reports an invalid
+    // file rather than a codec, so the Blackmagic decoder answers instead.
+    if (braw.isBrawFile(filePath)) {
+      const info = await braw.probe(filePath);
+      console.log('[Main] Probe result: braw', info.codecFriendly, info.width + 'x' + info.height);
+      return info;
+    }
+
     const result = await transcoder.probeFile(filePath);
     console.log('[Main] Probe result:', result.codec, result.codecFriendly, 'transcode:', result.needsTranscode);
     return result;
@@ -428,6 +440,12 @@ ipcMain.handle('probe-file', async (_event, filePath) => {
 ipcMain.handle('inspect-file', async (_event, filePath) => {
   console.log('[Main] IPC: inspect-file', filePath);
   try {
+    // inspector.js is ffprobe-based, and ffprobe cannot read .braw. Return the
+    // decoder's own metadata rather than an ffprobe parse failure.
+    if (braw.isBrawFile(filePath)) {
+      return await braw.inspect(filePath);
+    }
+
     return await inspector.inspectFile(filePath);
   } catch (err) {
     console.error('[Main] Inspect error:', err.message);

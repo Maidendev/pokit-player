@@ -44,6 +44,10 @@ Deep inspection via ffprobe, in a summary view with an expandable **Advanced** s
   WMV/ASF, MKV, WebM, AVI, MJ2
 - **Video codecs** — H.264, HEVC (incl. 4K), MPEG-2, Apple ProRes (Proxy/LT/422/HQ/4444/4444 XQ),
   DNxHD & DNxHR, JPEG 2000, VC-1, Windows Media
+- **Blackmagic RAW** — `.braw` plays through Blackmagic's own SDK, since FFmpeg
+  has no Blackmagic RAW decoder. Needs the `braw-decode` helper to be built and
+  bundled; see [native/braw-decode](native/braw-decode/README.md). Video only
+  for now — `.braw` audio is not wired up yet.
 - **Audio codecs** — AAC, MP3, Opus, Vorbis, FLAC play natively; AC-3, E-AC-3, DTS,
   TrueHD and PCM are decoded through the streaming path
 - A file plays natively only when the container, video codec **and** audio codec are all
