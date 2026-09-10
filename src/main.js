@@ -155,6 +155,16 @@ function buildMenu() {
           },
         },
         {
+          label: 'Loop Playback',
+          // Cmd-L, as in QuickTime. Bare L stays shuttle forward (J/K/L), so
+          // this one IS registered rather than only hinted.
+          accelerator: 'CmdOrCtrl+L',
+          click: () => {
+            if (mainWindow) mainWindow.webContents.send('toggle-loop');
+          },
+        },
+        { type: 'separator' },
+        {
           label: 'Shuttle Forward',
           ...hint('L'),
           click: () => {

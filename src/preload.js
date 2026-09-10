@@ -50,6 +50,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onOpenFile: (callback) => ipcRenderer.on('open-file', (_e, path) => callback(path)),
   onOpenImageSequence: (callback) => ipcRenderer.on('open-image-sequence', (_e, path) => callback(path)),
   onPlaybackToggle: (callback) => ipcRenderer.on('playback-toggle', () => callback()),
+  onToggleLoop: (callback) => ipcRenderer.on('toggle-loop', () => callback()),
   onShuttle: (callback) => ipcRenderer.on('shuttle', (_e, direction) => callback(direction)),
   onToggleGopStrip: (callback) => ipcRenderer.on('toggle-gop-strip', () => callback()),
   onSeekRelative: (callback) => ipcRenderer.on('seek-relative', (_e, seconds) => callback(seconds)),

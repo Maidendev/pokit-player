@@ -16,6 +16,8 @@ A professional, cross-platform desktop video player built with Electron. Feature
 - Volume control with mute toggle
 - Native fullscreen mode
 - Frame-by-frame navigation (forward & backward)
+- Loop playback (⌘L, or Playback ▸ Loop Playback) — repeats seamlessly, which
+  matters for image-sequence review and screening-room checks
 
 #### Timecode Display
 - Real-time HH:MM:SS:FF timecode (Hours:Minutes:Seconds:Frames)

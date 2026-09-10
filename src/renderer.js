@@ -35,6 +35,7 @@
   const btnSkipFwd = document.getElementById('btn-skip-fwd');
   const btnPrevFrame = document.getElementById('btn-prev-frame');
   const btnNextFrame = document.getElementById('btn-next-frame');
+  const btnLoop = document.getElementById('btn-loop');
   const btnMute = document.getElementById('btn-mute');
   const volumeSlider = document.getElementById('volume-slider');
   const btnInfo = document.getElementById('btn-info');
@@ -107,6 +108,7 @@
 
   // ─── MSE Streaming State (v1.1.0) ─────────────────────
   let streamMode = false;           // true when using MSE streaming playback
+  let loopEnabled = false;          // Loop Playback — see toggleLoop()
   let mediaSource = null;           // MediaSource instance
   let sourceBuffer = null;          // SourceBuffer for fMP4 data
   let pendingBuffers = [];          // Queue of ArrayBuffers waiting to be appended
@@ -280,6 +282,8 @@
   function cleanupMSE() {
     console.log('[Renderer] Cleaning up MSE session');
     streamMode = false;
+    // Back on the native path, so hand looping to the browser again.
+    video.loop = loopEnabled;
     mseReady = false;
     firstDataReceived = false;
     streamEnded = false;
@@ -328,6 +332,8 @@
     cleanupMSE();
 
     streamMode = true;
+    // MediaSource cannot loop itself; the 'ended' handler restarts the stream.
+    video.loop = false;
     streamSeekTime = seekTime;
     streamEnded = false;
     firstDataReceived = false;
@@ -1310,6 +1316,7 @@
   btnSkipFwd.addEventListener('click', () => seekRelative(5));
   btnPrevFrame.addEventListener('click', () => frameStep(-1));
   btnNextFrame.addEventListener('click', () => frameStep(1));
+  btnLoop.addEventListener('click', () => toggleLoop());
   btnMute.addEventListener('click', toggleMute);
   btnFullscreen.addEventListener('click', toggleFullscreen);
   btnInfo.addEventListener('click', () => togglePanel(fileInfoPanel));
@@ -1353,6 +1360,18 @@
     shuttleDirection = 0;
     shuttleSpeed = 1;
     video.playbackRate = 1;
+
+    // Native playback loops via video.loop, which the browser handles without
+    // a gap. The streaming path cannot: MediaSource has already been told the
+    // stream ended, so restart it from the top instead.
+    if (loopEnabled && streamMode) {
+      console.log('[Renderer] Loop — restarting stream from the start');
+      seekInStream(0).then(() => video.play()).catch((err) => {
+        console.warn('[Renderer] Loop restart failed:', err.message);
+      });
+      return;
+    }
+
     updatePlayButton();
     showControls();
   });
@@ -1423,6 +1442,28 @@
       el.tagName === 'SELECT' || el.isContentEditable);
   }
 
+  /**
+   * Loop Playback.
+   *
+   * For everything played natively — including a rendered image sequence,
+   * which is the screening-room case — video.loop hands looping to the
+   * browser, so it repeats without a gap or a re-decode. The MSE streaming
+   * path has no equivalent and is restarted from the 'ended' handler above.
+   */
+  function toggleLoop(force) {
+    loopEnabled = (force === undefined) ? !loopEnabled : !!force;
+    video.loop = loopEnabled && !streamMode;
+    updateLoopButton();
+    console.log('[Renderer] Loop playback:', loopEnabled ? 'on' : 'off');
+  }
+
+  function updateLoopButton() {
+    if (!btnLoop) return;
+    btnLoop.classList.toggle('active', loopEnabled);
+    btnLoop.setAttribute('aria-pressed', loopEnabled ? 'true' : 'false');
+    btnLoop.title = (loopEnabled ? 'Loop Playback: On' : 'Loop Playback: Off') + ' (⌘L)';
+  }
+
   document.addEventListener('keydown', (e) => {
     if (isTypingTarget(e.target)) return;
 
@@ -1468,7 +1509,13 @@
         }
         break;
       case 'KeyL':
-        if (!mod && !e.repeat) { e.preventDefault(); if (kHeld) slowShuttle(1); else shuttleForward(); }
+        // Bare L is shuttle forward (J/K/L); Cmd-L is Loop, as in QuickTime.
+        if ((e.metaKey || e.ctrlKey) && !e.altKey) {
+          if (!e.repeat) { e.preventDefault(); toggleLoop(); }
+        } else if (!mod && !e.repeat) {
+          e.preventDefault();
+          if (kHeld) slowShuttle(1); else shuttleForward();
+        }
         break;
       case 'KeyF': if (!mod) { e.preventDefault(); toggleFullscreen(); } break;
       case 'KeyM': if (!mod) { e.preventDefault(); toggleMute(); } break;
@@ -1499,6 +1546,7 @@
   });
 
   window.electronAPI.onPlaybackToggle(() => togglePlay());
+  window.electronAPI.onToggleLoop(() => toggleLoop());
   window.electronAPI.onShuttle((direction) => stepShuttle(direction));
   window.electronAPI.onToggleGopStrip(() => toggleGopStrip());
   window.electronAPI.onToggleAudioPanel(() => toggleAudioPanel());

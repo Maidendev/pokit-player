@@ -1217,3 +1217,13 @@ body:-webkit-full-screen #controls-bar {
   .seq-dialog-box { width: 300px; padding: 20px 24px; }
   .transcode-progress-track { width: 220px; }
 }
+
+/* Loop Playback, when on. A lit control rather than a pressed one, so the
+   state is readable across a dark screening room at a glance. */
+.ctrl-btn.active {
+  color: #4da3ff;
+  background: rgba(77, 163, 255, 0.14);
+}
+.ctrl-btn.active:hover {
+  background: rgba(77, 163, 255, 0.22);
+}
