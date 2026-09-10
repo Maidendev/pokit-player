@@ -66,5 +66,12 @@ FOOTAGE/
 # See native/braw-decode/README.md.
 native/braw-decode/sdk/
 native/braw-decode/build/
+# The installer downloads themselves — ~174 MB, and sdk/ already holds what
+# the build needs.
+native/*.zip
+native/*.dmg
+native/*.msi
 src/bin/braw-decode
 src/bin/braw-decode.exe
+src/bin/BlackmagicRawAPI.framework/
+src/bin/BlackmagicRawAPI.dll

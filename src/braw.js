@@ -208,8 +208,30 @@ function shapeProbe(filePath, raw) {
     // is rounded into a decimal.
     brawFrameRateRational: raw.frameRateRational || String(fps),
     brawColorScience: raw.colorScience || null,
+    // ISO and white balance are per-FRAME metadata in Blackmagic RAW, so the
+    // helper does not read them on the probe path — that would put a frame
+    // read in front of every file open. They stay null until something needs
+    // them badly enough to pay for it.
     brawIso: raw.iso || null,
     brawWhiteBalance: raw.whiteBalance || null,
+
+    // Production metadata the camera recorded. A QC operator checks these
+    // against a shot list, so they are worth carrying even though no other
+    // format in the player supplies them.
+    brawCameraType: raw.cameraType || null,
+    brawReelName: raw.reelName || null,
+    brawClipNumber: raw.clipNumber || null,
+    brawScene: raw.scene || null,
+    brawTake: raw.take || null,
+    brawGoodTake: raw.goodTake || null,
+    brawLensType: raw.lensType || null,
+    brawCameraNumber: raw.cameraNumber || null,
+    brawDateRecorded: raw.dateRecorded || null,
+    brawFirmwareVersion: raw.firmwareVersion || null,
+    brawViewingGamma: raw.viewingGamma || null,
+    brawViewingGamut: raw.viewingGamut || null,
+    brawAudioSampleRate: raw.audioSampleRate || null,
+    brawAudioBitDepth: raw.audioBitDepth || null,
   };
 
   if (info.sourceTimecode && fps > 0) {
@@ -326,9 +348,9 @@ async function inspect(filePath) {
     channels: info.audioChannelsTotal,
     channelLayout: info.audioChannelsTotal === 2 ? 'stereo' : null,
     speakerLabels: null,
-    sampleRate: null,
-    bitDepth: null,
-    sampleFormat: null,
+    sampleRate: info.brawAudioSampleRate,
+    bitDepth: info.brawAudioBitDepth,
+    sampleFormat: info.brawAudioBitDepth ? 's' + info.brawAudioBitDepth + 'le' : null,
     bitrate: null,
     duration: info.duration,
     language: null,
@@ -347,7 +369,7 @@ async function inspect(filePath) {
       startTime: 0,
       nbStreams: video.length + audio.length,
       startTimecode: info.sourceTimecode,
-      reelName: null,
+      reelName: info.brawReelName,
       tags: {},
     },
     video,
@@ -359,10 +381,22 @@ async function inspect(filePath) {
     // Camera metadata has no ffprobe equivalent, so it rides in its own
     // section rather than being forced into a container tag.
     braw: {
+      cameraType: info.brawCameraType,
       colorScience: info.brawColorScience,
+      compressionRatio: info.codecProfile,
+      frameRateRational: info.brawFrameRateRational,
+      clipNumber: info.brawClipNumber,
+      scene: info.brawScene,
+      take: info.brawTake,
+      goodTake: info.brawGoodTake,
+      lensType: info.brawLensType,
+      cameraNumber: info.brawCameraNumber,
+      dateRecorded: info.brawDateRecorded,
+      firmwareVersion: info.brawFirmwareVersion,
+      viewingGamma: info.brawViewingGamma,
+      viewingGamut: info.brawViewingGamut,
       iso: info.brawIso,
       whiteBalance: info.brawWhiteBalance,
-      frameRateRational: info.brawFrameRateRational,
     },
   };
 }
