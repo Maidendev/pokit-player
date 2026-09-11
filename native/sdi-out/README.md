@@ -137,6 +137,33 @@ can be exercised without a card.
 from the Visual Studio build tools to generate the headers; that is a
 follow-up.
 
+## When it says "No Blackmagic device found"
+
+That one line has several distinct causes, so the app does not leave it there:
+
+- The menu shows the helper's own one-line reason beneath it.
+- **Playback ▸ External Video Output ▸ Output Diagnostics…** re-runs the
+  enumeration and shows everything the helper said — framework present or
+  missing, the installed Desktop Video version (read from the framework's
+  Info.plist, so it works even when the code will not load), dyld's exact
+  error if the API failed to load, whether the helper is running under
+  Rosetta, how many devices the driver reported, and the exit code or signal.
+  **Copy to Clipboard** and paste it back; that is the fastest way to a fix.
+
+The same output from a terminal, on any build:
+
+```
+"/Applications/MaidenPlayer.app/Contents/Resources/app.asar.unpacked/src/bin/sdi-out" --list-devices; echo "exit=$?"
+```
+
+How the API reaches the hardware, for reference: `DeckLinkAPI.framework` talks
+to the driver over an XPC service, `com.blackmagic-design.desktopvideo.DeckLinkHardwareXPCService`.
+Blackmagic's own samples are *sandboxed* and carry a mach-lookup exception for
+it; MaidenPlayer is not sandboxed, so no exception is needed. A hardened,
+notarized process needs `com.apple.security.cs.disable-library-validation` to
+load a framework signed by another team — the helper carries it (verified in
+the shipped 1.3.1 bundle).
+
 ## Verified
 
 Without a card, against a stub honouring the contract above: 2K DCI mode

@@ -352,37 +352,68 @@ function isAvailable() {
  *
  * @returns {Promise<Array<{index:number,name:string,modes:string[]}>>}
  */
-function listDevices() {
-  return new Promise((resolve, reject) => {
+/**
+ * Run the helper's enumeration and keep EVERYTHING it said.
+ *
+ * "No device found" is one symptom with several causes — helper crashed,
+ * API failed to load, driver reports nothing — and a bare empty array hides
+ * which. This resolves (never rejects) with the devices plus the raw stdout,
+ * stderr, exit code and helper path, so the app can show a diagnostics dialog
+ * a person can screenshot.
+ *
+ * @returns {Promise<{devices:Array, stdout:string, stderr:string, code:number|null,
+ *                    signal:string|null, error:string|null, helper:string|null}>}
+ */
+function listDevicesDetailed() {
+  return new Promise((resolve) => {
     const helper = helperPath();
+    const result = { devices: [], stdout: '', stderr: '', code: null, signal: null, error: null, helper };
     if (!helper) {
-      resolve([]);
+      result.error = MISSING_HELPER_MESSAGE;
+      resolve(result);
       return;
     }
 
-    const proc = spawn(helper, ['--list-devices'], { windowsHide: true });
-    let stdout = '';
-    let stderr = '';
-    proc.stdout.on('data', (d) => { stdout += d.toString(); });
-    proc.stderr.on('data', (d) => { stderr += d.toString(); });
-
+    let proc;
+    try {
+      proc = spawn(helper, ['--list-devices'], { windowsHide: true });
+    } catch (err) {
+      result.error = 'Could not run the SDI helper: ' + err.message;
+      resolve(result);
+      return;
+    }
+    proc.stdout.on('data', (d) => { result.stdout += d.toString(); });
+    proc.stderr.on('data', (d) => { result.stderr += d.toString(); });
     proc.on('error', (err) => {
-      reject(new Error('Could not run the SDI helper: ' + err.message));
+      result.error = 'Could not run the SDI helper: ' + err.message;
+      resolve(result);
     });
-
-    proc.on('close', (code) => {
+    proc.on('close', (code, signal) => {
+      result.code = code;
+      result.signal = signal;
       if (code !== 0) {
-        reject(new Error(stderr.trim() || 'sdi-out exited with code ' + code));
+        result.error = signal
+          ? 'sdi-out was killed by ' + signal + ' (a crash inside the helper or the DeckLink API)'
+          : (result.stderr.trim().split('\n').pop() || 'sdi-out exited with code ' + code);
+        resolve(result);
         return;
       }
       try {
-        const parsed = JSON.parse(stdout);
-        resolve(Array.isArray(parsed) ? parsed : (parsed.devices || []));
+        const parsed = JSON.parse(result.stdout);
+        result.devices = Array.isArray(parsed) ? parsed : (parsed.devices || []);
       } catch (e) {
-        reject(new Error('Could not parse sdi-out device list: ' + e.message));
+        result.error = 'Could not parse sdi-out device list: ' + e.message;
       }
+      resolve(result);
     });
   });
+}
+
+/** Devices only. Rejects on failure — kept for callers that want the old shape. */
+async function listDevices() {
+  const r = await listDevicesDetailed();
+  if (r.error && !r.devices.length) throw new Error(r.error);
+  return r.devices;
 }
 
 // ---------------------------------------------------------------------------
@@ -544,6 +575,7 @@ module.exports = {
   buildDecodeArgs,
   spawnDecoder,
   listDevices,
+  listDevicesDetailed,
   isAvailable,
   helperPath,
 };

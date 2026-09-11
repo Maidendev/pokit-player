@@ -21,18 +21,17 @@ let streamDecoder = null; // Singleton stream decoder instance
 let sdiOutput = null;          // active sdi.SdiOutput, or null
 let sdiDevices = [];           // last enumeration from the helper
 let sdiSelectedIndex = -1;     // device index, or -1 for the built-in display
+let sdiLastScan = null;        // full result of the last enumeration, for diagnostics
 
 function sdiSelectedDevice() {
   return sdiDevices.find((d) => d.index === sdiSelectedIndex) || null;
 }
 
 async function refreshSdiDevices() {
-  try {
-    sdiDevices = await sdi.listDevices();
-  } catch (err) {
-    console.error('[SDI] Device enumeration failed:', err.message);
-    sdiDevices = [];
-  }
+  sdiLastScan = await sdi.listDevicesDetailed();
+  sdiDevices = sdiLastScan.devices || [];
+  if (sdiLastScan.error) console.error('[SDI] Device enumeration:', sdiLastScan.error);
+  if (sdiLastScan.stderr) console.log('[SDI] helper said:\n' + sdiLastScan.stderr.trim());
   // A device that has been unplugged must not stay selected.
   if (sdiSelectedIndex !== -1 && !sdiSelectedDevice()) selectSdiDevice(-1);
   buildMenu();
@@ -59,6 +58,10 @@ function sdiOutputSubmenu() {
   ];
   if (sdiDevices.length === 0) {
     items.push({ label: 'No Blackmagic device found', enabled: false });
+    // Put the helper's own one-line reason right in the menu, so the first
+    // screenshot from a screening room already says why.
+    const reason = sdiScanReason();
+    if (reason) items.push({ label: '   ' + reason, enabled: false });
   }
   for (const d of sdiDevices) {
     items.push({
@@ -70,7 +73,53 @@ function sdiOutputSubmenu() {
   }
   items.push({ type: 'separator' });
   items.push({ label: 'Refresh Devices', click: () => refreshSdiDevices() });
+  items.push({ label: 'Output Diagnostics…', click: () => showSdiDiagnostics() });
   return items;
+}
+
+/** The single most useful line from the last scan, for the menu. */
+function sdiScanReason() {
+  if (!sdiLastScan) return null;
+  if (sdiLastScan.error) return sdiLastScan.error.split('\n')[0].slice(0, 90);
+  const failLine = (sdiLastScan.stderr || '').split('\n').map((l) => l.trim())
+    .filter((l) => l.startsWith('sdi-out:')).pop();
+  return failLine ? failLine.replace(/^sdi-out:\s*/, '').slice(0, 90) : null;
+}
+
+/**
+ * Everything the helper said, in a dialog. Meant to be screenshotted by
+ * someone standing at a rig we cannot see.
+ */
+async function showSdiDiagnostics() {
+  await refreshSdiDevices();
+  const r = sdiLastScan || {};
+  const lines = [
+    'Helper: ' + (r.helper || 'not found in this build'),
+    'Exit: ' + (r.signal ? 'killed by ' + r.signal : (r.code === null ? 'did not run' : 'code ' + r.code)),
+    'Devices: ' + (r.devices ? r.devices.length : 0),
+    '',
+    '— helper stderr —',
+    (r.stderr || '').trim() || '(nothing)',
+    '',
+    '— helper stdout —',
+    (r.stdout || '').trim() || '(nothing)',
+  ];
+  if (r.error) lines.splice(3, 0, 'Error: ' + r.error);
+  const detail = lines.join('\n');
+  console.log('[SDI] Diagnostics:\n' + detail);
+  if (!mainWindow) return;
+  const { response } = await dialog.showMessageBox(mainWindow, {
+    type: r.devices && r.devices.length ? 'info' : 'warning',
+    title: 'External Video Output — Diagnostics',
+    message: r.devices && r.devices.length
+      ? r.devices.length + ' Blackmagic device(s) found'
+      : 'No Blackmagic device found',
+    detail,
+    buttons: ['Copy to Clipboard', 'Close'],
+    defaultId: 0,
+    cancelId: 1,
+  });
+  if (response === 0) require('electron').clipboard.writeText(detail);
 }
 
 // All supported extensions (native + transcoded + image sequences)

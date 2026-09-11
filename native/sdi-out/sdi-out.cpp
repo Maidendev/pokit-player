@@ -37,7 +37,10 @@
 #include "DeckLinkAPI.h"
 
 #include <CoreFoundation/CoreFoundation.h>
+#include <dlfcn.h>
 #include <fcntl.h>
+#include <sys/stat.h>
+#include <sys/sysctl.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -136,11 +139,80 @@ bool readFully(int fd, void* dst, size_t n) {
 // --list-devices
 // ---------------------------------------------------------------------------
 
+/**
+ * Say WHY there are no devices, in machine-readable lines on stderr, always.
+ *
+ * "No device found" is the one symptom every distinct failure shares — the
+ * framework missing, the framework present but refusing to load, the API up
+ * but the driver reporting nothing — and the app cannot tell them apart from
+ * an empty list. These lines are what the Output Diagnostics dialog shows.
+ */
+void emitDiagnostics(bool apiLoaded) {
+  static const char* kFramework = "/Library/Frameworks/DeckLinkAPI.framework";
+  struct stat st;
+  const bool present = (::stat(kFramework, &st) == 0);
+  std::fprintf(stderr, "diag:framework %s\n", present ? "present" : "missing");
+
+  if (present) {
+    // The framework's Info.plist names the installed Desktop Video version
+    // WITHOUT loading any code, so this works even when the code won't load —
+    // which is exactly when a version mismatch is the thing worth knowing.
+    CFURLRef url = CFURLCreateWithFileSystemPath(kCFAllocatorDefault, CFSTR("/Library/Frameworks/DeckLinkAPI.framework"), kCFURLPOSIXPathStyle, true);
+    if (url) {
+      if (CFBundleRef b = CFBundleCreate(kCFAllocatorDefault, url)) {
+        auto* ver = static_cast<CFStringRef>(CFBundleGetValueForInfoDictionaryKey(b, CFSTR("CFBundleShortVersionString")));
+        auto* build = static_cast<CFStringRef>(CFBundleGetValueForInfoDictionaryKey(b, CFSTR("CFBundleVersion")));
+        std::fprintf(stderr, "diag:desktop-video-installed %s (build %s)\n",
+                     ver ? cfToStd(ver).c_str() : "?", build ? cfToStd(build).c_str() : "?");
+        CFRelease(b);
+      }
+      CFRelease(url);
+    }
+  }
+
+  if (present && !apiLoaded) {
+    // The SDK's dispatch swallows the loader error. Ask dyld directly so the
+    // real reason — wrong architecture, code-signing refusal, a missing
+    // dependency — is in the log, not guessed at.
+    void* h = ::dlopen("/Library/Frameworks/DeckLinkAPI.framework/DeckLinkAPI", RTLD_NOW);
+    if (h) std::fprintf(stderr, "diag:dlopen ok (the framework loads, but the entry points did not resolve)\n");
+    else   std::fprintf(stderr, "diag:dlopen failed: %s\n", ::dlerror());
+  }
+
+  if (IDeckLinkAPIInformation* info = CreateDeckLinkAPIInformationInstance()) {
+    CFStringRef v = nullptr;
+    if (info->GetString(BMDDeckLinkAPIVersion, &v) == S_OK && v) {
+      std::fprintf(stderr, "diag:desktop-video-api %s\n", cfToStd(v).c_str());
+      CFRelease(v);
+    }
+    info->Release();
+  } else {
+    std::fprintf(stderr, "diag:desktop-video-api unavailable\n");
+  }
+#if defined(__arm64__)
+  std::fprintf(stderr, "diag:helper-arch arm64\n");
+#else
+  // An x86_64 slice on an Apple Silicon Mac means Rosetta — which happens
+  // when the Intel build of the app is installed there, because a translated
+  // parent spawns translated children. Worth knowing before blaming the card.
+  int translated = 0; size_t sz = sizeof translated;
+  if (::sysctlbyname("sysctl.proc_translated", &translated, &sz, nullptr, 0) == 0 && translated == 1)
+    std::fprintf(stderr, "diag:helper-arch x86_64 (under Rosetta on Apple Silicon)\n");
+  else
+    std::fprintf(stderr, "diag:helper-arch x86_64\n");
+#endif
+  std::fflush(stderr);
+}
+
 int listDevices() {
   IDeckLinkIterator* it = CreateDeckLinkIteratorInstance();
+  emitDiagnostics(it != nullptr);
   if (!it) {
-    // Not an error: the driver is simply not on this machine.
-    fail("Desktop Video is not installed (no DeckLinkAPI.framework), so there are no devices to list");
+    struct stat st;
+    if (::stat("/Library/Frameworks/DeckLinkAPI.framework", &st) == 0)
+      fail("Desktop Video is installed, but its API could not be loaded — see the diag lines above for dyld's reason");
+    else
+      fail("Desktop Video is not installed (no DeckLinkAPI.framework), so there are no devices to list");
     std::printf("[]\n");
     return 0;
   }
@@ -206,6 +278,9 @@ int listDevices() {
   }
   it->Release();
   std::printf("]\n");
+  std::fprintf(stderr, "diag:devices-seen %d (output-capable listed above)\n", index);
+  if (index == 0)
+    fail("the API loaded but the driver reports 0 devices — check the device is powered, connected, and not held exclusively by another app");
   return 0;
 }
 
