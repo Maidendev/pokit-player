@@ -2498,7 +2498,7 @@
   const gopStatus = document.getElementById('gop-status');
   const gopCtx = gopCanvas.getContext('2d');
 
-  const GOP_COLORS = { I: '#ff9f43', P: '#54a0ff', B: '#8e8e93' };
+  const GOP_COLORS = { I: '#ff9f43', P: '#e612c5', B: '#8e8e93' };
 
   let gopVisible = false;
   let gopFrames = [];

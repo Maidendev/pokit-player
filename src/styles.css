@@ -11,12 +11,12 @@
   --text-primary: #e0e0e0;
   --text-secondary: #999999;
   --text-muted: #666666;
-  --accent: #4a90d9;
-  --accent-hover: #5ba0e9;
-  --accent-glow: rgba(74, 144, 217, 0.3);
+  --accent: #e612c5;
+  --accent-hover: #f03dd6;
+  --accent-glow: rgba(230, 18, 197, 0.3);
   --timeline-bg: #333333;
   --timeline-buffered: #444444;
-  --timeline-progress: #4a90d9;
+  --timeline-progress: #e612c5;
   --timeline-thumb: #ffffff;
   --border-color: #333333;
   --danger: #e74c3c;
@@ -893,7 +893,7 @@ html, body {
 }
 
 .gop-i { background: #ff9f43; }
-.gop-p { background: #54a0ff; }
+.gop-p { background: #e612c5; }
 .gop-b { background: #8e8e93; }
 
 #gop-status {
@@ -1219,11 +1219,12 @@ body:-webkit-full-screen #controls-bar {
 }
 
 /* Loop Playback, when on. A lit control rather than a pressed one, so the
-   state is readable across a dark screening room at a glance. */
+   state is readable across a dark screening room at a glance. Uses the brand
+   variables rather than its own colour, so the accent lives in one place. */
 .ctrl-btn.active {
-  color: #4da3ff;
-  background: rgba(77, 163, 255, 0.14);
+  color: var(--accent);
+  background: var(--accent-glow);
 }
 .ctrl-btn.active:hover {
-  background: rgba(77, 163, 255, 0.22);
+  filter: brightness(1.25);
 }
