@@ -66,6 +66,12 @@ FOOTAGE/
 # See native/braw-decode/README.md.
 native/braw-decode/sdk/
 native/braw-decode/build/
+# ── Blackmagic Desktop Video SDK (DeckLink), for SDI output ──
+# Download and unpack into native/sdi-out/sdk/. See native/sdi-out/README.md.
+native/sdi-out/sdk/
+native/sdi-out/build/
+src/bin/sdi-out
+src/bin/sdi-out.exe
 # The installer downloads themselves — ~174 MB, and sdk/ already holds what
 # the build needs.
 native/*.zip
