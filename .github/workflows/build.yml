@@ -103,9 +103,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          scripts/build-sdi-out.sh
-          lipo -archs src/bin/sdi-out | grep -q arm64 || { echo "sdi-out missing arm64 slice"; exit 1; }
-          lipo -archs src/bin/sdi-out | grep -q x86_64 || { echo "sdi-out missing x86_64 slice"; exit 1; }
+          # Invoked through bash, so the file's executable bit in git can never
+          # be the reason this fails — it once was: the script was committed
+          # 100644 and the step died in 0 seconds with nothing readable.
+          # The log is tee'd so a REAL failure (a compile error on a newer
+          # runner SDK, say) surfaces as an annotation; job logs need repo
+          # admin to download.
+          log="$RUNNER_TEMP/sdi-out-build.log"
+          if ! bash scripts/build-sdi-out.sh 2>&1 | tee "$log"; then
+            esc() { sed -e 's/%/%25/g' | awk 'BEGIN{ORS="%0A"}{print}'; }
+            echo "::error title=sdi-out helper build failed::$(tail -30 "$log" | esc)"
+            exit 1
+          fi
+          lipo -archs src/bin/sdi-out | grep -q arm64  || { echo "::error title=sdi-out not universal::missing arm64 slice";  exit 1; }
+          lipo -archs src/bin/sdi-out | grep -q x86_64 || { echo "::error title=sdi-out not universal::missing x86_64 slice"; exit 1; }
 
       # Say plainly in the log whether this build will be signed. Without this
       # an unsigned build looks identical to a signed one until a user hits
