@@ -188,6 +188,26 @@ professional_video_player/
 - **Context isolation** and **Content Security Policy** for security
 - **IPC** (Inter-Process Communication) between main and renderer via preload bridge
 
+#### Release identity — do not change these
+
+Two values in `package.json` are the app's permanent identity to the
+auto-updater, and changing either one silently breaks updates for everyone
+already installed:
+
+- **`build.appId`** (`com.maidenplayer.app`). On macOS this is the bundle
+  identifier, and Squirrel only applies an update whose signature satisfies
+  the running app's designated requirement — which embeds the identifier. A
+  changed appId is rejected as a different program.
+- **`build.nsis.guid`** (`69b674bf-4830-5868-9553-d10f90dcff58`). On Windows
+  the NSIS installer keys the install, the uninstall registry entry and the
+  shortcuts to this GUID. It is pinned to the value electron-builder derived
+  from the *original* appId, `com.pokitplayer.app`, so that installs of
+  PokitPlayer 1.2.x upgrade in place to MaidenPlayer rather than installing a
+  second copy alongside. Without the pin, electron-builder would derive a
+  new GUID from the new appId.
+
+Rename the product, the shortcuts, the artifacts freely — but never these.
+
 #### Supported Formats
 
 Format support depends on the platform's Chromium build:
