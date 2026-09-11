@@ -72,8 +72,9 @@ asked to do.
 v210 packs 6 pixels into 16 bytes, then pads every row to a 128-byte boundary.
 DCI widths are not multiples of 6, so a row is **wider** than `width/6*16`:
 
-| Format | Row bytes | `width/6*16` | Frame bytes |
+| Raster | Row bytes | `width/6*16` | Frame bytes |
 |---|---|---|---|
+| 1280x720 | 3,456 | 3,408 | 2,488,320 |
 | 1920x1080 | 5,120 | 5,120 | 5,529,600 |
 | 2048x1080 | **5,504** | 5,456 | 5,944,320 |
 | 3840x2160 | 10,240 | 10,240 | 22,118,400 |
@@ -85,17 +86,38 @@ row using the card's own `GetRowBytes()`, never a single contiguous `memcpy`.
 `src/sdi.js` exports `v210RowBytes()` and `v210FrameBytes()`, verified byte for
 byte against ffmpeg's v210 encoder at eight widths from 720 to 6144.
 
-## Data rates at 24 fps
+## Output modes
 
-| Format | Rate |
+32 in all — five rasters across the cinema and broadcast rates:
+
+| Raster | Rates |
 |---|---|
-| 1920x1080 | 133 MB/s |
-| 2048x1080 | 143 MB/s |
-| 3840x2160 | 531 MB/s |
-| 4096x2160 | 571 MB/s |
+| 4096x2160 (4K DCI) | 23.98, 24, 25, 29.97, 30, 50, 59.94, 60 |
+| 3840x2160 (UHD) | 23.98, 24, 25, 29.97, 30, 50, 59.94, 60 |
+| 2048x1080 (2K DCI) | 23.98, 24, 25, 29.97, 30 |
+| 1920x1080 (HD) | 23.98, 24, 25, 29.97, 30, 50, 59.94, 60 |
+| 1280x720 | 50, 59.94, 60 |
 
-4K needs 12G-SDI on the card. The pipe carries these comfortably; sustained
-disk read on the EXR source is the more likely limit.
+`deckLinkMode` on each entry is a **hint**, not the authority. The helper must
+resolve the real `BMDDisplayMode` by asking the card which modes it supports
+and matching on raster plus rate — those enum names shift between SDK versions,
+and a stale one fails at output time, after playback appears to have started.
+
+Pass the card's supported list to `matchModeForSource(source, supported)` and
+it will never offer a mode the device cannot do.
+
+## Data rates
+
+| Raster | 24 fps | 60 fps |
+|---|---|---|
+| 1920x1080 | 133 MB/s | 332 MB/s |
+| 2048x1080 | 143 MB/s | — |
+| 3840x2160 | 531 MB/s | 1,327 MB/s |
+| 4096x2160 | 571 MB/s | 1,427 MB/s |
+
+4K needs 12G-SDI on the card, and UHD or 4K at 60 needs roughly 1.4 GB/s
+sustained. The pipe carries it; sustained disk read on the EXR source is the
+more likely limit.
 
 ## Building
 

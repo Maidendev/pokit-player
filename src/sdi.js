@@ -85,20 +85,59 @@ function v210FrameBytes(width, height) {
 // pixel-format names out of the SDK.
 // ---------------------------------------------------------------------------
 
-const MODES = [
-  // UHD and 4K DCI first: this is what the room runs, and both DCI widths
-  // exercise the row padding above.
-  { name: '4kdci2398', label: '4K DCI 4096x2160 23.98p', width: 4096, height: 2160, fps: 23.976, fpsRational: '24000/1001', deckLinkMode: 'bmdMode4kDCI2398' },
-  { name: '4kdci24',   label: '4K DCI 4096x2160 24p',    width: 4096, height: 2160, fps: 24,     fpsRational: '24/1',        deckLinkMode: 'bmdMode4kDCI24' },
-  { name: 'uhd2398',   label: 'UHD 3840x2160 23.98p',    width: 3840, height: 2160, fps: 23.976, fpsRational: '24000/1001', deckLinkMode: 'bmdMode4K2160p2398' },
-  { name: 'uhd24',     label: 'UHD 3840x2160 24p',       width: 3840, height: 2160, fps: 24,     fpsRational: '24/1',        deckLinkMode: 'bmdMode4K2160p24' },
-  { name: 'uhd25',     label: 'UHD 3840x2160 25p',       width: 3840, height: 2160, fps: 25,     fpsRational: '25/1',        deckLinkMode: 'bmdMode4K2160p25' },
-  { name: '2kdci2398', label: '2K DCI 2048x1080 23.98p', width: 2048, height: 1080, fps: 23.976, fpsRational: '24000/1001', deckLinkMode: 'bmdMode2kDCI2398' },
-  { name: '2kdci24',   label: '2K DCI 2048x1080 24p',    width: 2048, height: 1080, fps: 24,     fpsRational: '24/1',        deckLinkMode: 'bmdMode2kDCI24' },
-  { name: 'hd1080p2398', label: 'HD 1920x1080 23.98p',   width: 1920, height: 1080, fps: 23.976, fpsRational: '24000/1001', deckLinkMode: 'bmdModeHD1080p2398' },
-  { name: 'hd1080p24',   label: 'HD 1920x1080 24p',      width: 1920, height: 1080, fps: 24,     fpsRational: '24/1',        deckLinkMode: 'bmdModeHD1080p24' },
-  { name: 'hd1080p25',   label: 'HD 1920x1080 25p',      width: 1920, height: 1080, fps: 25,     fpsRational: '25/1',        deckLinkMode: 'bmdModeHD1080p25' },
+// Rasters and rates are built as a table rather than written out one by one:
+// it is 30-odd combinations, and a hand-written list of that size is where a
+// transposed digit hides.
+const RASTERS = [
+  { key: '4kdci',  label: '4K DCI', width: 4096, height: 2160, deckLink: 'bmdMode4kDCI' },
+  { key: 'uhd',    label: 'UHD',    width: 3840, height: 2160, deckLink: 'bmdMode4K2160p' },
+  { key: '2kdci',  label: '2K DCI', width: 2048, height: 1080, deckLink: 'bmdMode2kDCI' },
+  { key: 'hd1080', label: 'HD',     width: 1920, height: 1080, deckLink: 'bmdModeHD1080p' },
+  { key: 'hd720',  label: 'HD',     width: 1280, height: 720,  deckLink: 'bmdModeHD720p' },
 ];
+
+const RATES = [
+  { key: '2398', fps: 23.976, rational: '24000/1001', label: '23.98p' },
+  { key: '24',   fps: 24,     rational: '24/1',        label: '24p' },
+  { key: '25',   fps: 25,     rational: '25/1',        label: '25p' },
+  { key: '2997', fps: 29.97,  rational: '30000/1001', label: '29.97p' },
+  { key: '30',   fps: 30,     rational: '30/1',        label: '30p' },
+  { key: '50',   fps: 50,     rational: '50/1',        label: '50p' },
+  { key: '5994', fps: 59.94,  rational: '60000/1001', label: '59.94p' },
+  { key: '60',   fps: 60,     rational: '60/1',        label: '60p' },
+];
+
+// Which rates each raster is offered at. 720p has never had the cinema rates,
+// and the high rates at 4K need 12G-SDI — whether THIS card can do a given
+// mode is answered by the device itself (see matchModeForSource's `supported`
+// argument), not guessed at here.
+const RATES_BY_RASTER = {
+  '4kdci':  ['2398', '24', '25', '2997', '30', '50', '5994', '60'],
+  'uhd':    ['2398', '24', '25', '2997', '30', '50', '5994', '60'],
+  '2kdci':  ['2398', '24', '25', '2997', '30'],
+  'hd1080': ['2398', '24', '25', '2997', '30', '50', '5994', '60'],
+  'hd720':  ['50', '5994', '60'],
+};
+
+const MODES = [];
+for (const raster of RASTERS) {
+  for (const rateKey of RATES_BY_RASTER[raster.key]) {
+    const rate = RATES.find((r) => r.key === rateKey);
+    MODES.push({
+      name: raster.key + 'p' + rate.key,
+      label: raster.label + ' ' + raster.width + 'x' + raster.height + ' ' + rate.label,
+      width: raster.width,
+      height: raster.height,
+      fps: rate.fps,
+      fpsRational: rate.rational,
+      // A HINT for the helper, not the authority. The helper resolves the
+      // actual BMDDisplayMode by asking the card which modes it supports and
+      // matching on raster plus rate, because these enum names vary between
+      // SDK versions and a stale one would fail at output time.
+      deckLinkMode: raster.deckLink + rate.key,
+    });
+  }
+}
 
 function findMode(name) {
   return MODES.find((m) => m.name === name) || null;
@@ -115,8 +154,16 @@ function findMode(name) {
  * @param {{width:number,height:number,fps:number}} source
  * @returns {object|null}
  */
-function matchModeForSource(source) {
+function matchModeForSource(source, supported) {
   if (!source || !source.width || !source.height) return null;
+
+  // When the device has told us what it can do, never offer anything else —
+  // scheduling an unsupported mode fails at the card, after playback has
+  // apparently started.
+  const available = (Array.isArray(supported) && supported.length)
+    ? MODES.filter((m) => supported.includes(m.name) || supported.includes(m.deckLinkMode))
+    : MODES;
+  if (!available.length) return null;
 
   // The tolerance has to be TIGHTER than the gap between 23.976 and 24, which
   // is 0.024. A looser window treats them as the same rate, and a 24p sequence
@@ -127,12 +174,12 @@ function matchModeForSource(source) {
   const RATE_EPSILON = 0.01;
   const delta = (m) => Math.abs(m.fps - source.fps);
 
-  let pool = MODES;
+  let pool = available;
   if (source.fps) {
-    pool = MODES.filter((m) => delta(m) <= RATE_EPSILON);
+    pool = available.filter((m) => delta(m) <= RATE_EPSILON);
     if (!pool.length) {
-      const nearest = MODES.reduce((best, m) => (delta(m) < delta(best) ? m : best), MODES[0]);
-      pool = MODES.filter((m) => Math.abs(m.fps - nearest.fps) <= RATE_EPSILON);
+      const nearest = available.reduce((best, m) => (delta(m) < delta(best) ? m : best), available[0]);
+      pool = available.filter((m) => Math.abs(m.fps - nearest.fps) <= RATE_EPSILON);
       console.warn('[SDI] No output mode runs at ' + source.fps +
                    ' fps; nearest is ' + nearest.fps + ' fps, which will judder');
     }
@@ -294,6 +341,8 @@ function listDevices() {
 module.exports = {
   MISSING_HELPER_MESSAGE,
   MODES,
+  RASTERS,
+  RATES,
   V210_ROW_ALIGNMENT,
   v210RowBytes,
   v210FrameBytes,
