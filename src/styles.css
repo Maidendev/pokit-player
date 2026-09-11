@@ -1228,3 +1228,19 @@ body:-webkit-full-screen #controls-bar {
 .ctrl-btn.active:hover {
   filter: brightness(1.25);
 }
+
+/* External video output badge, beside the title. Shows which device playback
+   is routed to and whether the card is keeping up — the one thing an operator
+   in a dark room needs to see without walking to the machine. */
+.sdi-badge {
+  margin-left: 10px;
+  padding: 1px 8px;
+  border-radius: var(--radius);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  color: var(--accent);
+  background: var(--accent-glow);
+  white-space: nowrap;
+}
+.sdi-badge.warn  { color: #f1c40f; background: rgba(241, 196, 15, 0.16); }
+.sdi-badge.error { color: var(--danger); background: rgba(231, 76, 60, 0.16); }

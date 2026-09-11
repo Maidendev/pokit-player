@@ -51,6 +51,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onOpenImageSequence: (callback) => ipcRenderer.on('open-image-sequence', (_e, path) => callback(path)),
   onPlaybackToggle: (callback) => ipcRenderer.on('playback-toggle', () => callback()),
   onToggleLoop: (callback) => ipcRenderer.on('toggle-loop', () => callback()),
+
+  // External video output (Blackmagic SDI)
+  sdiGetState: () => ipcRenderer.invoke('sdi-get-state'),
+  sdiStart: (opts) => ipcRenderer.invoke('sdi-start', opts),
+  sdiStop: () => ipcRenderer.invoke('sdi-stop'),
+  sdiPause: () => ipcRenderer.invoke('sdi-pause'),
+  sdiResume: () => ipcRenderer.invoke('sdi-resume'),
+  onSdiDeviceChanged: (callback) => ipcRenderer.on('sdi-device-changed', (_e, device) => callback(device)),
+  onSdiStatus: (callback) => ipcRenderer.on('sdi-status', (_e, status) => callback(status)),
   onShuttle: (callback) => ipcRenderer.on('shuttle', (_e, direction) => callback(direction)),
   onToggleGopStrip: (callback) => ipcRenderer.on('toggle-gop-strip', () => callback()),
   onSeekRelative: (callback) => ipcRenderer.on('seek-relative', (_e, seconds) => callback(seconds)),

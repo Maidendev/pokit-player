@@ -1,139 +1,149 @@
 # sdi-out
 
 Sends frame-accurate playback out of a Blackmagic DeckLink or UltraStudio
-device to a projector or reference monitor.
+device over SDI, to a projector or reference monitor.
 
-**Not built yet.** It needs Blackmagic's Desktop Video SDK, a separate
-registration-gated download. The Node side — [`src/sdi.js`](../../src/sdi.js) —
-is written and tested; this is the half that talks to the card.
+**In the app:** Playback ▸ **External Video Output** ▸ pick the device. That is
+the equivalent of RV's Present Mode — whatever is loaded is routed to the card
+from the current position, and the transport (play, pause, seek, loop) drives
+the card. A badge beside the title shows which device is live and whether it
+is keeping up. Choose *Built-in Display* to release the card.
 
 ## Why it exists
 
 A screening-room check means putting a sequence on the projector and watching
-it run. Doing that today means signing into a paid seat in another application
-to perform what is fundamentally a playback test. MaidenPlayer already opens
-EXR and DPX sequences and needs no account, so the only missing piece is the
-SDI output itself.
+it run. Doing that with RV means signing into a paid seat to perform what is
+fundamentally a playback test. MaidenPlayer already opens EXR and DPX sequences
+and needs no account; this is the missing output.
 
-## Two constraints that shape the design
-
-**It must not use the H.264 proxy.** Image sequences are normally rendered to
-H.264 at CRF 18 in `yuv420p` for the `<video>` element. Sending that down an
-SDI cable would put an 8-bit, chroma-subsampled picture on a VFX projector and
-invite conclusions about a float render that the picture cannot support. So the
-SDI path decodes the source straight to 10-bit 4:2:2 and never touches the
-proxy.
-
-**The clock cannot live in Electron's main process.** That thread also runs
-IPC, the menus, the auto-updater and garbage collection; a hard real-time frame
-schedule sharing it will drop frames, which defeats the point. A separate
-process also means a driver fault cannot take the player down mid-screening.
+## How it works
 
 ```
 EXR / DPX / ProRes → ffmpeg (v210, 10-bit 4:2:2) → sdi-out → DeckLink → SDI
                                                       ↑
-                                          control lines on stdin
+                                          control lines on fd 3
 ```
 
-`v210` is the card's native `bmdFormat10BitYUV`, so frames arrive needing no
-conversion at all.
+**It never uses the H.264 proxy.** Image sequences are rendered to H.264 at
+CRF 18 in `yuv420p` for the `<video>` element. Putting that on a VFX projector
+would invite conclusions about a float render from an 8-bit, chroma-subsampled
+picture, so SDI decodes the *original* frames straight to `v210` — the card's
+native `bmdFormat10BitYUV` — and the proxy stays on the laptop screen.
+
+**The clock lives in this process, not Electron's.** Electron's main thread
+also runs IPC, menus, the auto-updater and garbage collection; a hard real-time
+schedule sharing it drops frames. A separate process also means a driver fault
+cannot take the player down mid-screening.
+
+**Loop is ffmpeg's job.** `-stream_loop -1` re-reads the input seamlessly, so
+the card sees one continuous stream and nothing has to hold a clip in RAM — at
+4K DCI that would be 24 MB a frame.
+
+## What the helper does that is not obvious
+
+- **The API is loaded at runtime**, by Blackmagic's own `DeckLinkAPIDispatch.cpp`,
+  from `/Library/Frameworks/DeckLinkAPI.framework` — which Desktop Video
+  installs. Nothing is linked and nothing is bundled. With no driver present
+  `--list-devices` prints `[]` and exits 0: "no card" is a normal answer.
+- **Frames complete on the SDK's thread.** Reading stdin inside that callback
+  would stall the feed on a slow decoder, so a reader thread fills frames ahead
+  into a ready queue and the callback only takes one that is already full.
+- **An empty queue repeats the last frame** rather than going black. A repeated
+  frame is a visible glitch; black is a lost picture. It is reported as
+  `status:underrun` and the badge turns amber.
+- **Row stride comes from the card** (`GetRowBytes`), never assumed. ffmpeg's
+  v210 row is `((w+47)/48)*128` and DeckLink documents the same, but if they
+  ever differ the copy goes row by row rather than shearing the image.
+- **Pause holds the last frame** on the projector via `DisplayVideoFrameSync`.
+  Frames scheduled but not yet shown are flushed by the card and lost; resume
+  prerolls fresh ones, so a few frames skip on resume.
+- **The cushion is deep on purpose.** `--buffer-frames` (default 24, one second
+  at 24 fps) is how many frames sit on the card ahead of the clock; half are
+  prerolled before it starts. The cost is RAM — about 570 MB at 4K DCI.
 
 ## CLI contract
 
-`src/sdi.js` depends on this. Changing it means changing both sides.
+`src/sdi.js` depends on this exactly.
 
 ### `sdi-out --list-devices`
 
-Print a JSON array and exit `0`. An empty array is a valid answer — no device
-connected is a normal state, not an error.
+A JSON array of output-capable devices and the **progressive** modes each can
+drive at 10-bit YUV over SDI, as reported by the hardware. `[]` when Desktop
+Video is absent.
 
 ```json
-[ { "index": 0, "name": "UltraStudio 4K Mini", "modes": ["bmdMode4kDCI24", "..."] } ]
+[{ "index": 0, "name": "UltraStudio 4K Mini", "model": "UltraStudio 4K Mini",
+   "modes": [{ "id": "4d24", "name": "4K DCI 24p", "width": 4096, "height": 2160,
+               "fps": 24, "fpsRational": "24000/1000" }, "..."] }]
 ```
 
-### `sdi-out --play --device N --mode <bmdDisplayMode>`
+`id` is the `BMDDisplayMode` FourCC as four characters. It is what `--mode`
+takes, so the player never handles an SDK enum. `index` is the iterator
+position and stays stable even when capture-only devices are skipped.
 
-Read v210 frames from **stdin** and schedule them to the device. Read control
-lines from a separate channel (fd 3) so they never collide with frame data:
+### `sdi-out --play --device N --mode XXXX [--buffer-frames 24]`
 
-| Line | Effect |
-|---|---|
-| `play` | Start or resume scheduled playback |
-| `pause` | Hold on the current frame |
-| `stop` | Stop playback, disable output |
-| `loop on` / `loop off` | Repeat at end of stream |
+v210 frames on **stdin**, back to back. Control lines on **fd 3**: `play`,
+`pause`, `stop`. Status lines on stderr, prefixed `status:` — `mode …`,
+`playing`, `paused`, `underrun`, `recovered`, `eof frames=N`, `stopped`.
 
-Write one status line per state change to stderr, prefixed `status:`, so the
-player can reflect what the card is actually doing rather than what it was
-asked to do.
+## Row stride — the trap
 
-## Row stride — get this right or the picture shears
-
-v210 packs 6 pixels into 16 bytes, then pads every row to a 128-byte boundary.
-DCI widths are not multiples of 6, so a row is **wider** than `width/6*16`:
-
-| Raster | Row bytes | `width/6*16` | Frame bytes |
-|---|---|---|---|
-| 1280x720 | 3,456 | 3,408 | 2,488,320 |
-| 1920x1080 | 5,120 | 5,120 | 5,529,600 |
-| 2048x1080 | **5,504** | 5,456 | 5,944,320 |
-| 3840x2160 | 10,240 | 10,240 | 22,118,400 |
-| 4096x2160 | **11,008** | 10,912 | 23,777,280 |
-
-At 4K DCI the naive figure is short by 207,360 bytes per frame. Copy row by
-row using the card's own `GetRowBytes()`, never a single contiguous `memcpy`.
-
-`src/sdi.js` exports `v210RowBytes()` and `v210FrameBytes()`, verified byte for
-byte against ffmpeg's v210 encoder at eight widths from 720 to 6144.
-
-## Output modes
-
-32 in all — five rasters across the cinema and broadcast rates:
-
-| Raster | Rates |
-|---|---|
-| 4096x2160 (4K DCI) | 23.98, 24, 25, 29.97, 30, 50, 59.94, 60 |
-| 3840x2160 (UHD) | 23.98, 24, 25, 29.97, 30, 50, 59.94, 60 |
-| 2048x1080 (2K DCI) | 23.98, 24, 25, 29.97, 30 |
-| 1920x1080 (HD) | 23.98, 24, 25, 29.97, 30, 50, 59.94, 60 |
-| 1280x720 | 50, 59.94, 60 |
-
-`deckLinkMode` on each entry is a **hint**, not the authority. The helper must
-resolve the real `BMDDisplayMode` by asking the card which modes it supports
-and matching on raster plus rate — those enum names shift between SDK versions,
-and a stale one fails at output time, after playback appears to have started.
-
-Pass the card's supported list to `matchModeForSource(source, supported)` and
-it will never offer a mode the device cannot do.
-
-## Data rates
-
-| Raster | 24 fps | 60 fps |
+| Raster | Row bytes | naive `w/6*16` |
 |---|---|---|
-| 1920x1080 | 133 MB/s | 332 MB/s |
-| 2048x1080 | 143 MB/s | — |
-| 3840x2160 | 531 MB/s | 1,327 MB/s |
-| 4096x2160 | 571 MB/s | 1,427 MB/s |
+| 1920x1080 | 5,120 | 5,120 |
+| 2048x1080 | **5,504** | 5,456 |
+| 3840x2160 | 10,240 | 10,240 |
+| 4096x2160 | **11,008** | 10,912 |
 
-4K needs 12G-SDI on the card, and UHD or 4K at 60 needs roughly 1.4 GB/s
-sustained. The pipe carries it; sustained disk read on the EXR source is the
-more likely limit.
+DCI widths are not multiples of 6, so rows pad to a 128-byte boundary. At 4K
+DCI the naive figure is 207,360 bytes per frame short — a shear across the
+projector. Verified byte for byte against ffmpeg's v210 encoder at eight widths.
+
+## Decode speed is the real constraint
+
+The card is fed by ffmpeg decoding the source in real time. Measured on a
+2012-era Intel i7 with a float-EXR sequence:
+
+| Target | Decode rate | Real time? |
+|---|---|---|
+| 2K DCI | 35.9 fps | yes, 1.5× headroom |
+| 4K DCI | 20.6 fps | **no** — 1.2× too slow |
+
+A modern machine is several times faster, but **4K float EXR at 24 fps needs a
+box that can decode it at 24 fps sustained.** If the rig underruns, the answer
+is not a bigger buffer — it is a pre-cache pass that decodes the sequence to
+v210 on disk first and plays from there. That is the natural next step if the
+room's machine cannot keep up.
+
+Data rates the card must be fed, at 24 fps: 143 MB/s at 2K DCI, 531 MB/s at
+UHD, 571 MB/s at 4K DCI. 4K needs 12G-SDI.
 
 ## Building
 
-Download the Desktop Video SDK from
-<https://www.blackmagicdesign.com/developer/products/capture-and-playback/sdk-and-software>
-("Desktop Video SDK", Register and Download) and unpack it into
-`native/sdi-out/sdk/`. Desktop Video itself — the driver — also has to be
-installed on any machine that drives a card.
+The DeckLink SDK 16.0 headers are **in the repo** at `sdk/` under Blackmagic's
+redistribution licence, which every file carries. So:
 
-The output belongs at `src/bin/sdi-out` (`.exe` on Windows), where `src/sdi.js`
-looks and which `asarUnpack` already keeps outside the archive.
-`MAIDENPLAYER_SDI_OUT` overrides the path for testing.
+```
+scripts/build-sdi-out.sh          # macOS, universal, no CMake needed
+```
 
-## Testing
+produces `src/bin/sdi-out`. CI runs this on the macOS job, so the helper ships
+in the installers. `MAIDENPLAYER_SDI_OUT` overrides the path for testing;
+pointing it at `stub/sdi-out` fakes a device so the whole player-side pipeline
+can be exercised without a card.
 
-There is no way to emulate an SDI output: verifying playout needs a real card
-and a real display. Device enumeration, mode negotiation and the stride maths
-are testable without hardware and are covered. Everything past that has to be
-confirmed on a rig.
+**Windows is not built yet.** The Windows SDK is `.idl` files that need `midl`
+from the Visual Studio build tools to generate the headers; that is a
+follow-up.
+
+## Verified
+
+Without a card, against a stub honouring the contract above: 2K DCI mode
+negotiated with the padded stride, exactly 24 frames at EOF, pause and resume
+over the control channel, gapless loop past the clip end, zero underruns with
+the default cushion. The real helper compiles universal against the SDK and
+enumerates correctly on a machine with no driver.
+
+**Playout itself has not been seen on a card.** There is no way to emulate an
+SDI output; the first real test is on the rig.

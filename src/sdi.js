@@ -134,7 +134,10 @@ for (const raster of RASTERS) {
       // actual BMDDisplayMode by asking the card which modes it supports and
       // matching on raster plus rate, because these enum names vary between
       // SDK versions and a stale one would fail at output time.
-      deckLinkMode: raster.deckLink + rate.key,
+      // One irregularity in Blackmagic's naming: 1080p60 is bmdModeHD1080p6000,
+      // every other 60p mode is plain p60. It is only a hint (the helper asks
+      // the card), but a correct hint is a cheaper lookup.
+      deckLinkMode: raster.deckLink + (raster.key === 'hd1080' && rate.key === '60' ? '6000' : rate.key),
     });
   }
 }
@@ -154,6 +157,45 @@ function findMode(name) {
  * @param {{width:number,height:number,fps:number}} source
  * @returns {object|null}
  */
+/**
+ * Pick the best of `candidates` for a source. Shared by matchModeForSource
+ * (the static table) and chooseDeviceMode (what a card actually reports).
+ */
+function pickMode(candidates, source) {
+  if (!candidates || !candidates.length || !source || !source.width || !source.height) return null;
+
+  const RATE_EPSILON = 0.01;
+  const delta = (m) => Math.abs(m.fps - source.fps);
+
+  let pool = candidates;
+  if (source.fps) {
+    pool = candidates.filter((m) => delta(m) <= RATE_EPSILON);
+    if (!pool.length) {
+      const nearest = candidates.reduce((b, m) => (delta(m) < delta(b) ? m : b), candidates[0]);
+      pool = candidates.filter((m) => Math.abs(m.fps - nearest.fps) <= RATE_EPSILON);
+      console.warn('[SDI] No output mode runs at ' + source.fps +
+                   ' fps; nearest is ' + nearest.fps + ' fps, which will judder');
+    }
+  }
+
+  const exact = pool.find((m) => m.width === source.width && m.height === source.height);
+  if (exact) return exact;
+  const containing = pool
+    .filter((m) => m.width >= source.width && m.height >= source.height)
+    .sort((a, b) => (a.width * a.height) - (b.width * b.height));
+  if (containing.length) return containing[0];
+  return pool.slice().sort((a, b) => (b.width * b.height) - (a.width * a.height))[0] || null;
+}
+
+/**
+ * Choose an output mode from what a connected device reports it can do —
+ * the authoritative list, since it came from the hardware.
+ * @param {{modes: Array}} device  An entry from listDevices().
+ */
+function chooseDeviceMode(device, source) {
+  return pickMode(device && device.modes, source);
+}
+
 function matchModeForSource(source, supported) {
   if (!source || !source.width || !source.height) return null;
 
@@ -222,6 +264,11 @@ function buildDecodeArgs(opts) {
   if (!mode) throw new Error('buildDecodeArgs: mode is required');
 
   const args = [];
+
+  // Loop playback belongs to ffmpeg, not the helper: -stream_loop re-reads the
+  // input seamlessly, so the card sees one continuous stream and nothing has
+  // to hold a clip in memory — at 4K DCI that would be 24 MB a frame.
+  if (opts.loop) args.push('-stream_loop', '-1');
 
   if (opts.isImageSequence) {
     // The rate has to be declared: a sequence of stills carries none.
@@ -338,7 +385,153 @@ function listDevices() {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Output session
+// ---------------------------------------------------------------------------
+
+/**
+ * One SDI playout: ffmpeg decoding to v210, piped into sdi-out, which owns the
+ * clock. Seeking is a restart (stop, then start at the new position), the same
+ * way the stream decoder handles it; pause and resume go over the control
+ * channel so the picture holds on the projector instead of going black.
+ */
+class SdiOutput {
+  constructor() {
+    this.helper = null;
+    this.decoder = null;
+    this.active = false;
+    this.onStatus = null;   // (string) => void — 'playing' | 'paused' | 'underrun' | 'eof ...' | 'stopped'
+    this.onError = null;    // (string) => void
+    this.onEnd = null;      // () => void
+  }
+
+  /**
+   * @param {object} opts
+   * @param {number} opts.deviceIndex   From listDevices().
+   * @param {object} opts.mode          From chooseDeviceMode(): has id, width, height, fpsRational.
+   * @param {string} opts.source        File, or image-sequence pattern.
+   * @param {boolean} [opts.isImageSequence]
+   * @param {number}  [opts.startFrame]
+   * @param {number}  [opts.startTime]
+   * @param {boolean} [opts.loop]
+   */
+  start(opts) {
+    this.stop();
+    const helperBin = helperPath();
+    if (!helperBin) {
+      if (this.onError) this.onError(MISSING_HELPER_MESSAGE);
+      return false;
+    }
+    if (!opts || !opts.mode || !opts.mode.id) {
+      if (this.onError) this.onError('SDI output needs a device mode');
+      return false;
+    }
+
+    this.active = true;
+
+    // stdin: frames. stderr: status. fd 3: control lines.
+    // 24 frames is a second of cushion at 24 fps; see sdi-out.cpp for the
+    // RAM trade-off. Callers on a constrained machine can pass fewer.
+    const bufferFrames = String(Math.max(4, opts.bufferFrames || 24));
+    this.helper = spawn(helperBin, ['--play', '--device', String(opts.deviceIndex), '--mode', opts.mode.id,
+                                    '--buffer-frames', bufferFrames], {
+      windowsHide: true,
+      stdio: ['pipe', 'ignore', 'pipe', 'pipe'],
+    });
+    this.decoder = spawnDecoder(opts);
+
+    this.decoder.stdout.pipe(this.helper.stdin);
+
+    // EPIPE is the normal outcome of a stop or seek — the helper is gone and
+    // ffmpeg is still writing. Not an error.
+    this.helper.stdin.on('error', (e) => { if (e && e.code !== 'EPIPE') console.error('[SDI] helper stdin:', e.message); });
+    this.decoder.stdout.on('error', (e) => { if (e && e.code !== 'EPIPE') console.error('[SDI] decoder stdout:', e.message); });
+
+    let stderrTail = '';
+    this.helper.stderr.on('data', (d) => {
+      const text = d.toString();
+      for (const line of text.split('\n')) {
+        if (!line) continue;
+        if (line.startsWith('status:')) {
+          const st = line.slice(7).trim();
+          console.log('[SDI] ' + st);
+          if (this.onStatus) this.onStatus(st);
+        } else {
+          console.log('[SDI] ' + line);
+          stderrTail = (stderrTail + line + '\n').slice(-2000);
+        }
+      }
+    });
+    this.decoder.stderr.on('data', (d) => {
+      // ffmpeg is chatty; keep only what a failure would need.
+      const t = d.toString();
+      if (/error|invalid|no such|permission/i.test(t)) console.error('[SDI] ffmpeg:', t.trim().split('\n').pop());
+    });
+
+    this.helper.on('error', (e) => {
+      if (!this.active) return;
+      this.teardown();
+      if (this.onError) this.onError('Could not run the SDI helper: ' + e.message);
+    });
+    // 'exit', NOT 'close'. Node's 'close' waits for every stdio pipe to shut,
+    // and the control channel on fd 3 is a pipe WE hold open — so 'close'
+    // never fired after a clean end and the session believed the helper was
+    // still running. 'exit' fires when the process does.
+    this.helper.on('exit', (code, signal) => {
+      if (!this.active) return;
+      const clean = code === 0;
+      this.teardown();
+      if (clean) { if (this.onEnd) this.onEnd(); }
+      else if (this.onError) this.onError((stderrTail.trim() || 'SDI helper exited with ' + (signal || ('code ' + code))));
+    });
+    this.decoder.on('close', (code) => {
+      // ffmpeg finishing is expected at end of clip; the helper drains and
+      // then closes on its own. Anything else is reported.
+      if (this.active && code !== 0 && code !== null && this.helper) {
+        console.warn('[SDI] ffmpeg exited with code', code);
+      }
+    });
+
+    return true;
+  }
+
+  control(cmd) {
+    if (!this.helper || !this.helper.stdio[3]) return;
+    try { this.helper.stdio[3].write(cmd + '\n'); } catch (_) { /* helper gone */ }
+  }
+  pause()  { this.control('pause'); }
+  resume() { this.control('play'); }
+
+  stop() {
+    if (!this.active && !this.helper) return;
+    this.active = false;
+    this.control('stop');
+    this.teardown();
+  }
+
+  teardown() {
+    this.active = false;
+    if (this.decoder) {
+      try { this.decoder.stdout.unpipe(); this.decoder.kill('SIGKILL'); } catch (_) { /* ignore */ }
+      this.decoder = null;
+    }
+    if (this.helper) {
+      const h = this.helper;
+      this.helper = null;
+      try { h.removeAllListeners('exit'); } catch (_) { /* ignore */ }
+      // Close what we hold, or the child's pipes linger in this process.
+      for (const st of [h.stdin, h.stdio[3]]) { try { if (st) st.destroy(); } catch (_) { /* ignore */ } }
+      try { h.kill('SIGTERM'); } catch (_) { /* ignore */ }
+    }
+  }
+
+  isActive() { return this.active; }
+}
+
 module.exports = {
+  SdiOutput,
+  chooseDeviceMode,
+  pickMode,
   MISSING_HELPER_MESSAGE,
   MODES,
   RASTERS,

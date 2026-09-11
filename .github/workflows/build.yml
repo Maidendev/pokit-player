@@ -91,6 +91,22 @@ jobs:
               echo "ERROR: $f is not $expected"; exit 1; }
           done
 
+      # The Blackmagic SDI output helper. Nothing to download: the DeckLink SDK
+      # headers are committed under Blackmagic's redistribution licence, and
+      # the API itself is loaded at RUNTIME from the user's Desktop Video
+      # install, so there is no framework to bundle either. The binary lands
+      # in src/bin beside the ffmpeg builds and ships the same way. It needs
+      # no card to compile — on this runner it reports no devices, which is
+      # the correct answer here.
+      - name: Build SDI output helper
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          scripts/build-sdi-out.sh
+          lipo -archs src/bin/sdi-out | grep -q arm64 || { echo "sdi-out missing arm64 slice"; exit 1; }
+          lipo -archs src/bin/sdi-out | grep -q x86_64 || { echo "sdi-out missing x86_64 slice"; exit 1; }
+
       # Say plainly in the log whether this build will be signed. Without this
       # an unsigned build looks identical to a signed one until a user hits
       # the Gatekeeper warning.
@@ -470,6 +486,15 @@ jobs:
             echo "    app binary : $(lipo -archs "$bin")"
             lipo -archs "$bin" | grep -qw "$want" || {
               echo "    ERROR: expected $want"; fail=1; }
+            # The SDI helper has to be inside the bundle and universal, or the
+            # External Video Output menu will say the feature is not installed.
+            local sdi
+            sdi=$(find "$app" -name 'sdi-out' -type f 2>/dev/null | head -1) || true
+            if [[ -n "$sdi" ]]; then
+              echo "    sdi-out    : $(lipo -archs "$sdi")"
+            else
+              echo "    ERROR: sdi-out helper is not in the bundle"; fail=1
+            fi
             # The bundled ffmpeg must match too — this is the one that silently
             # ships wrong and only fails at transcode time.
             local ff

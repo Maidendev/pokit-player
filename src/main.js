@@ -7,10 +7,71 @@ const loudness = require('./loudness');
 const captions = require('./captions');
 const { StreamDecoder } = require('./stream-decoder');
 const braw = require('./braw');
+const sdi = require('./sdi');
 const { autoUpdater } = require('electron-updater');
 
 let mainWindow = null;
 let streamDecoder = null; // Singleton stream decoder instance
+
+// ─── External video output (Blackmagic SDI) ───────────────────────────────
+// The equivalent of RV's "Present Mode": pick a DeckLink / UltraStudio in the
+// Playback menu and playback is routed out of it over SDI. The renderer owns
+// the transport and tells us when to start, pause, resume and stop; the clock
+// itself lives in the sdi-out helper process (see src/sdi.js for why).
+let sdiOutput = null;          // active sdi.SdiOutput, or null
+let sdiDevices = [];           // last enumeration from the helper
+let sdiSelectedIndex = -1;     // device index, or -1 for the built-in display
+
+function sdiSelectedDevice() {
+  return sdiDevices.find((d) => d.index === sdiSelectedIndex) || null;
+}
+
+async function refreshSdiDevices() {
+  try {
+    sdiDevices = await sdi.listDevices();
+  } catch (err) {
+    console.error('[SDI] Device enumeration failed:', err.message);
+    sdiDevices = [];
+  }
+  // A device that has been unplugged must not stay selected.
+  if (sdiSelectedIndex !== -1 && !sdiSelectedDevice()) selectSdiDevice(-1);
+  buildMenu();
+}
+
+function selectSdiDevice(index) {
+  sdiSelectedIndex = index;
+  buildMenu();
+  if (mainWindow) mainWindow.webContents.send('sdi-device-changed', sdiSelectedDevice());
+}
+
+/** The Playback ▸ External Video Output submenu, rebuilt on every enumeration. */
+function sdiOutputSubmenu() {
+  if (!sdi.isAvailable()) {
+    return [{ label: 'SDI output is not installed in this build', enabled: false }];
+  }
+  const items = [
+    {
+      label: 'Built-in Display',
+      type: 'radio',
+      checked: sdiSelectedIndex === -1,
+      click: () => selectSdiDevice(-1),
+    },
+  ];
+  if (sdiDevices.length === 0) {
+    items.push({ label: 'No Blackmagic device found', enabled: false });
+  }
+  for (const d of sdiDevices) {
+    items.push({
+      label: d.name,
+      type: 'radio',
+      checked: sdiSelectedIndex === d.index,
+      click: () => selectSdiDevice(d.index),
+    });
+  }
+  items.push({ type: 'separator' });
+  items.push({ label: 'Refresh Devices', click: () => refreshSdiDevices() });
+  return items;
+}
 
 // All supported extensions (native + transcoded + image sequences)
 const VIDEO_EXTENSIONS = [
@@ -162,6 +223,12 @@ function buildMenu() {
           click: () => {
             if (mainWindow) mainWindow.webContents.send('toggle-loop');
           },
+        },
+        {
+          // Present Mode, in RV's terms: route playback out of a Blackmagic
+          // device over SDI. Devices are enumerated by the sdi-out helper.
+          label: 'External Video Output',
+          submenu: sdiOutputSubmenu(),
         },
         { type: 'separator' },
         {
@@ -669,6 +736,65 @@ ipcMain.handle('set-stream-flow', async (_event, shouldFlow) => {
   return true;
 });
 
+// ─── SDI output IPC ────────────────────────────────────────────────────────
+
+ipcMain.handle('sdi-get-state', async () => ({
+  available: sdi.isAvailable(),
+  device: sdiSelectedDevice(),
+}));
+
+/**
+ * Start routing the current media to the selected device.
+ * opts: { source, isImageSequence, startFrame, startTime, loop, startPaused,
+ *         width, height, fps }
+ */
+ipcMain.handle('sdi-start', async (_event, opts) => {
+  const device = sdiSelectedDevice();
+  if (!device) return { error: 'No external video device is selected.' };
+
+  // Ask the DEVICE which of its modes fits — never the static table, since the
+  // card is the authority on what it can drive.
+  const mode = sdi.chooseDeviceMode(device, { width: opts.width, height: opts.height, fps: opts.fps });
+  if (!mode) {
+    return { error: device.name + ' offers no output mode for ' + opts.width + 'x' + opts.height +
+                    ' at ' + opts.fps + ' fps over SDI.' };
+  }
+
+  if (sdiOutput) sdiOutput.stop();
+  sdiOutput = new sdi.SdiOutput();
+
+  const send = (payload) => { if (mainWindow) mainWindow.webContents.send('sdi-status', payload); };
+  let holdOnFirstPlay = !!opts.startPaused;
+  sdiOutput.onStatus = (st) => {
+    const state = st.split(' ')[0];
+    if (state === 'playing' && holdOnFirstPlay) {
+      // Media is paused in the player: preroll, then hold the first frame.
+      holdOnFirstPlay = false;
+      sdiOutput.pause();
+    }
+    send({ state, detail: st, device: device.name, mode: mode.name });
+  };
+  sdiOutput.onError = (msg) => send({ state: 'error', detail: msg, device: device.name, mode: mode.name });
+  sdiOutput.onEnd = () => send({ state: 'ended', device: device.name, mode: mode.name });
+
+  const ok = sdiOutput.start({
+    deviceIndex: device.index,
+    mode,
+    source: opts.source,
+    isImageSequence: !!opts.isImageSequence,
+    startFrame: opts.startFrame,
+    startTime: opts.startTime,
+    loop: !!opts.loop,
+  });
+  if (!ok) return { error: sdi.MISSING_HELPER_MESSAGE };
+  console.log('[SDI] Started:', device.name, mode.name, opts.source);
+  return { ok: true, mode: mode.name, device: device.name };
+});
+
+ipcMain.handle('sdi-stop', async () => { if (sdiOutput) { sdiOutput.stop(); sdiOutput = null; } return { ok: true }; });
+ipcMain.handle('sdi-pause', async () => { if (sdiOutput) sdiOutput.pause(); return { ok: true }; });
+ipcMain.handle('sdi-resume', async () => { if (sdiOutput) sdiOutput.resume(); return { ok: true }; });
+
 ipcMain.handle('stop-stream', async () => {
   console.log('[Main] IPC: stop-stream');
   if (streamDecoder) {
@@ -820,3 +946,8 @@ app.on('will-quit', () => {
   }
   transcoder.cleanupTempFiles();
 });
+
+// SDI: find devices once the app is up, and release the card when it quits —
+// an output left enabled keeps the projector on our last frame.
+app.whenReady().then(() => { refreshSdiDevices(); });
+app.on('before-quit', () => { if (sdiOutput) { sdiOutput.stop(); sdiOutput = null; } });

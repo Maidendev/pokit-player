@@ -50,6 +50,17 @@ Deep inspection via ffprobe, in a summary view with an expandable **Advanced** s
   has no Blackmagic RAW decoder. Needs the `braw-decode` helper to be built and
   bundled; see [native/braw-decode](native/braw-decode/README.md). Video only
   for now — `.braw` audio is not wired up yet.
+
+#### External Video Output (Blackmagic SDI)
+- **Playback ▸ External Video Output** lists every connected DeckLink or
+  UltraStudio and routes playback out of it over SDI — the equivalent of RV's
+  Present Mode, with no account to sign into. Pick the device; play, pause,
+  seek and loop drive the card; a badge by the title shows the device is live.
+- Image sequences go out as the **original EXR/DPX frames** decoded to 10-bit
+  4:2:2, never the H.264 preview proxy. Output mode is chosen from what the
+  card itself reports it can drive, so a 24p sequence never lands on a 23.98
+  mode. Details, the stride trap and decode-speed limits are in
+  [native/sdi-out](native/sdi-out/README.md). macOS only for now.
 - **Audio codecs** — AAC, MP3, Opus, Vorbis, FLAC play natively; AC-3, E-AC-3, DTS,
   TrueHD and PCM are decoded through the streaming path
 - A file plays natively only when the container, video codec **and** audio codec are all

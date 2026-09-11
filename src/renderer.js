@@ -36,6 +36,7 @@
   const btnPrevFrame = document.getElementById('btn-prev-frame');
   const btnNextFrame = document.getElementById('btn-next-frame');
   const btnLoop = document.getElementById('btn-loop');
+  const sdiBadge = document.getElementById('sdi-badge');
   const btnMute = document.getElementById('btn-mute');
   const volumeSlider = document.getElementById('volume-slider');
   const btnInfo = document.getElementById('btn-info');
@@ -110,6 +111,12 @@
   let streamMode = false;           // true when using MSE streaming playback
   let loopEnabled = false;          // Loop Playback — see toggleLoop()
   const JUMP_SECONDS = 1;           // Cmd/Ctrl-arrow and the skip buttons
+  // External video output (Blackmagic SDI). The selected device comes from
+  // the Playback menu via main; this side drives it from the transport.
+  let sdiDevice = null;             // selected device, or null for built-in
+  let sdiActive = false;            // an output session is running
+  let currentSeqInfo = null;        // image-sequence details, so SDI decodes the ORIGINALS
+  let sdiRestartTimer = null;
   let mediaSource = null;           // MediaSource instance
   let sourceBuffer = null;          // SourceBuffer for fMP4 data
   let pendingBuffers = [];          // Queue of ArrayBuffers waiting to be appended
@@ -260,6 +267,7 @@
       frameRate = fps;
       frameDuration = 1 / frameRate;
       originalFilePath = seqInfo.sampleFile;
+      currentSeqInfo = seqInfo;
       wasTranscoded = true;
       currentProbeInfo = {
         codecFriendly: 'Image Sequence (' + seqInfo.suffix.replace('.', '').toUpperCase() + ')',
@@ -712,6 +720,7 @@
 
   async function openVideoFile(filePath) {
     originalFilePath = filePath;
+    currentSeqInfo = null;
     currentProbeInfo = null;
     wasTranscoded = false;
 
@@ -1348,12 +1357,14 @@
   // ─── Video Events ─────────────────────────────────────
 
   video.addEventListener('play', () => {
+    if (sdiActive) window.electronAPI.sdiResume();
     updatePlayButton(); showControls(); resyncSecondaryAudio(true);
     // First play is the user gesture that lets an AudioContext start, so the
     // meters are wired up here rather than at load.
     initChannelMeters();
   });
   video.addEventListener('pause', () => {
+    if (sdiActive) window.electronAPI.sdiPause();
     updatePlayButton(); showControls(); clearTimeout(controlsTimeout);
     if (secondaryAudio) secondaryAudio.pause();
   });
@@ -1385,11 +1396,14 @@
     resyncSecondaryAudio();
   });
   video.addEventListener('seeked', () => {
+    sdiRestart();
     activeCueIndex = -1;          // a seek can land anywhere in the cue list
     updateCaptionOverlay();
     resyncSecondaryAudio(true);
   });
   video.addEventListener('loadedmetadata', () => {
+    // New media with a device selected: route it. Dimensions are known now.
+    if (sdiDevice) sdiStartForCurrentMedia();
     console.log('[Renderer] Video metadata loaded:', video.videoWidth + 'x' + video.videoHeight, 'duration:', video.duration);
     updateTimecode();
     startTimecodeUpdater();
@@ -1456,6 +1470,70 @@
     video.loop = loopEnabled && !streamMode;
     updateLoopButton();
     console.log('[Renderer] Loop playback:', loopEnabled ? 'on' : 'off');
+    sdiRestart();
+  }
+
+  // ─── External video output (SDI) ───────────────────────────────────
+
+  function updateSdiBadge(state, detail) {
+    if (!sdiBadge) return;
+    if (!sdiDevice) { sdiBadge.classList.add('hidden'); return; }
+    sdiBadge.classList.remove('hidden', 'warn', 'error');
+    const name = sdiDevice.name;
+    switch (state) {
+      case 'playing':  sdiBadge.textContent = 'SDI ▶ ' + name; break;
+      case 'paused':   sdiBadge.textContent = 'SDI ❙❙ ' + name; break;
+      case 'underrun': sdiBadge.textContent = 'SDI ▶ ' + name + ' — underrun'; sdiBadge.classList.add('warn'); break;
+      case 'error':    sdiBadge.textContent = 'SDI ✕ ' + name; sdiBadge.classList.add('error'); break;
+      default:         sdiBadge.textContent = 'SDI: ' + name;
+    }
+    sdiBadge.title = detail ? String(detail) : 'External video output: ' + name;
+  }
+
+  /**
+   * Route whatever is loaded to the selected device, from the current
+   * position. For an image sequence this decodes the ORIGINAL frames — the
+   * H.264 proxy in the <video> element never goes anywhere near the SDI cable.
+   */
+  async function sdiStartForCurrentMedia() {
+    if (!sdiDevice || !originalFilePath) return;
+    const fps = frameRate || (currentProbeInfo && currentProbeInfo.fps) || 24;
+    const opts = {
+      width: video.videoWidth || (currentProbeInfo && currentProbeInfo.width) || 0,
+      height: video.videoHeight || (currentProbeInfo && currentProbeInfo.height) || 0,
+      fps,
+      loop: loopEnabled,
+      startPaused: video.paused,
+    };
+    if (!opts.width || !opts.height) return;   // not loaded yet; loadedmetadata calls again
+
+    if (currentSeqInfo) {
+      opts.source = currentSeqInfo.pattern;
+      opts.isImageSequence = true;
+      opts.startFrame = currentSeqInfo.startFrame + Math.round((video.currentTime || 0) * fps);
+    } else {
+      opts.source = originalFilePath;
+      opts.startTime = video.currentTime || 0;
+    }
+
+    const r = await window.electronAPI.sdiStart(opts);
+    if (r && r.error) {
+      sdiActive = false;
+      updateSdiBadge('error', r.error);
+      console.error('[SDI]', r.error);
+      alert('External video output could not start:\n\n' + r.error);
+      return;
+    }
+    sdiActive = true;
+    console.log('[SDI] Routing to', r.device, 'as', r.mode);
+  }
+
+  /** A seek or a loop change means a fresh decode from a new place. Debounced:
+   *  frame-stepping fires 'seeked' per frame, and a restart is not free. */
+  function sdiRestart() {
+    if (!sdiActive) return;
+    clearTimeout(sdiRestartTimer);
+    sdiRestartTimer = setTimeout(() => { sdiStartForCurrentMedia(); }, 150);
   }
 
   function updateLoopButton() {
@@ -1548,6 +1626,28 @@
 
   window.electronAPI.onPlaybackToggle(() => togglePlay());
   window.electronAPI.onToggleLoop(() => toggleLoop());
+  window.electronAPI.onSdiDeviceChanged((device) => {
+    sdiDevice = device;
+    if (!device) {
+      sdiActive = false;
+      window.electronAPI.sdiStop();
+      updateSdiBadge(null);
+      console.log('[SDI] Output: built-in display');
+      return;
+    }
+    updateSdiBadge('selected');
+    console.log('[SDI] Output device selected:', device.name);
+    if (originalFilePath) sdiStartForCurrentMedia();
+  });
+  window.electronAPI.onSdiStatus((st) => {
+    if (!st) return;
+    if (st.state === 'ended' || st.state === 'stopped') { sdiActive = false; updateSdiBadge('selected'); return; }
+    if (st.state === 'error') { sdiActive = false; }
+    updateSdiBadge(st.state, st.detail);
+  });
+  window.electronAPI.sdiGetState().then((st) => {
+    if (st && st.device) { sdiDevice = st.device; updateSdiBadge('selected'); }
+  }).catch(() => {});
   window.electronAPI.onShuttle((direction) => stepShuttle(direction));
   window.electronAPI.onToggleGopStrip(() => toggleGopStrip());
   window.electronAPI.onToggleAudioPanel(() => toggleAudioPanel());
@@ -2645,6 +2745,6 @@
   // ─── Initial State ────────────────────────────────────
   updateVolumeIcon();
   updatePlayButton();
-  console.log('[Renderer] MaidenPlayer v1.3.0 initialized');
+  console.log('[Renderer] MaidenPlayer v1.3.1 initialized');
 
 })();

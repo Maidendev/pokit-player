@@ -66,9 +66,10 @@ FOOTAGE/
 # See native/braw-decode/README.md.
 native/braw-decode/sdk/
 native/braw-decode/build/
-# ── Blackmagic Desktop Video SDK (DeckLink), for SDI output ──
-# Download and unpack into native/sdi-out/sdk/. See native/sdi-out/README.md.
-native/sdi-out/sdk/
+# ── Blackmagic DeckLink SDK, for SDI output ──
+# The headers are COMMITTED (native/sdi-out/sdk) — Blackmagic's licence in
+# every file grants redistribution, and having them in-tree is what lets CI
+# build sdi-out with no download. Only build output is ignored here.
 native/sdi-out/build/
 src/bin/sdi-out
 src/bin/sdi-out.exe

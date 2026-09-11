@@ -1,0 +1,124 @@
+#!/usr/bin/env node
+// Stub that honours the sdi-out CLI contract without any Blackmagic hardware.
+//
+// It advertises one fake device and, in --play, consumes v210 frames from
+// stdin at the mode's frame rate — pausing stdin when it has a few buffered,
+// resuming when it runs low — so the player-side pipeline (ffmpeg → helper,
+// backpressure, control channel, status lines) can be exercised end to end on
+// a machine with no card. Point MAIDENPLAYER_SDI_OUT at this file to use it.
+'use strict';
+
+const fs = require('fs');
+
+const DEVICE = {
+  index: 0,
+  name: 'UltraStudio 4K Mini (stub)',
+  model: 'UltraStudio 4K Mini',
+  modes: [
+    { id: '4d23', name: '4K DCI 23.98p', width: 4096, height: 2160, fps: 23.976, fpsRational: '24000/1001' },
+    { id: '4d24', name: '4K DCI 24p',    width: 4096, height: 2160, fps: 24,     fpsRational: '24000/1000' },
+    { id: '4k23', name: '2160p23.98',    width: 3840, height: 2160, fps: 23.976, fpsRational: '24000/1001' },
+    { id: '4k24', name: '2160p24',       width: 3840, height: 2160, fps: 24,     fpsRational: '24000/1000' },
+    { id: '2d24', name: '2K DCI 24p',    width: 2048, height: 1080, fps: 24,     fpsRational: '24000/1000' },
+    { id: '23ps', name: '1080p23.98',    width: 1920, height: 1080, fps: 23.976, fpsRational: '24000/1001' },
+    { id: '24ps', name: '1080p24',       width: 1920, height: 1080, fps: 24,     fpsRational: '24000/1000' },
+    { id: 'Hp25', name: '1080p25',       width: 1920, height: 1080, fps: 25,     fpsRational: '25000/1000' },
+  ],
+};
+
+const status = (s) => process.stderr.write('status:' + s + '\n');
+const v210RowBytes = (w) => Math.floor((w + 47) / 48) * 128;
+
+const args = process.argv.slice(2);
+
+if (args[0] === '--list-devices') {
+  process.stdout.write(JSON.stringify([DEVICE]) + '\n');
+  process.exit(0);
+}
+
+if (args[0] !== '--play') {
+  process.stderr.write('stub sdi-out: unknown mode\n');
+  process.exit(2);
+}
+
+let device = -1;
+let modeId = null;
+let bufferFrames = 24;
+for (let i = 1; i < args.length; i++) {
+  if (args[i] === '--device') device = Number(args[++i]);
+  else if (args[i] === '--mode') modeId = args[++i];
+  else if (args[i] === '--buffer-frames') bufferFrames = Math.max(4, Number(args[++i]));
+}
+// Same cushion policy as the real helper: preroll half, hold up to all.
+const PREROLL = Math.max(4, Math.floor(bufferFrames / 2));
+const mode = DEVICE.modes.find((m) => m.id === modeId);
+if (device !== 0 || !mode) {
+  process.stderr.write('stub sdi-out: bad --device or --mode\n');
+  process.exit(1);
+}
+
+const frameBytes = v210RowBytes(mode.width) * mode.height;
+const frameMs = 1000 / mode.fps;
+status('mode ' + mode.id + ' ' + mode.name + ' ' + mode.width + 'x' + mode.height + ' rowbytes=' + v210RowBytes(mode.width) + ' buffer=' + bufferFrames);
+
+let pending = 0;          // bytes received but not yet a whole frame
+let buffered = 0;         // whole frames waiting to be "displayed"
+let shown = 0;
+let underruns = 0;
+let playing = false;
+let eof = false;
+let started = false;
+
+process.stdin.on('data', (chunk) => {
+  pending += chunk.length;
+  while (pending >= frameBytes) { pending -= frameBytes; buffered++; }
+  if (buffered >= bufferFrames) process.stdin.pause();
+  if (!started && buffered >= PREROLL) { started = true; playing = true; status('playing'); }
+});
+process.stdin.on('end', () => { eof = true; if (!started && buffered > 0) { started = true; playing = true; status('playing'); } });
+
+// The "card": one frame per interval.
+const tick = setInterval(() => {
+  if (!playing) return;
+  if (buffered > 0) {
+    buffered--; shown++;
+    if (buffered < PREROLL) process.stdin.resume();
+  } else if (eof) {
+    clearInterval(tick);
+    status('eof frames=' + shown + (underruns ? ' underruns=' + underruns : ''));
+    status('stopped');
+    process.exit(0);
+  } else if (started) {
+    underruns++;
+    status('underrun');
+  }
+}, frameMs);
+
+// Control channel on fd 3, if the parent opened one.
+//
+// A net.Socket, NOT fs.createReadStream. The fs stream does a blocking read()
+// on a libuv threadpool thread, and process.exit() joins the threadpool — so a
+// thread parked in read() on a control pipe that never speaks kept this stub
+// alive for good after it had already printed status:stopped. A Socket on the
+// fd is event-loop driven and closes with the process. The fstat guard skips
+// the channel entirely when the parent gave us no fd 3 (standalone use).
+let ctl = null;
+try {
+  fs.fstatSync(3);
+  ctl = new (require('net').Socket)({ fd: 3, readable: true, writable: false });
+} catch (_) { ctl = null; }
+if (ctl) {
+  let buf = '';
+  ctl.on('data', (d) => {
+    buf += d.toString();
+    let nl;
+    while ((nl = buf.indexOf('\n')) >= 0) {
+      const cmd = buf.slice(0, nl).trim(); buf = buf.slice(nl + 1);
+      if (cmd === 'play')  { playing = true;  status('playing'); }
+      if (cmd === 'pause') { playing = false; status('paused'); }
+      if (cmd === 'stop')  { clearInterval(tick); status('stopped'); process.exit(0); }
+    }
+  });
+  ctl.on('error', () => {});
+  ctl.on('end', () => { clearInterval(tick); status('stopped'); process.exit(0); });
+}
