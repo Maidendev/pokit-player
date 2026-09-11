@@ -143,21 +143,21 @@
       <div id="controls-row">
         <!-- Left: Playback controls -->
         <div class="controls-left">
-          <button id="btn-skip-back" class="ctrl-btn" title="Skip Back 5s (←)">
-            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12.5 3C7.81 3 4 6.81 4 11.5H1l4 4 4-4H6c0-3.59 2.91-6.5 6.5-6.5S19 7.91 19 11.5 16.09 18 12.5 18v2c4.69 0 8.5-3.81 8.5-8.5S17.19 3 12.5 3z"/><text x="9" y="14.5" font-size="6" font-weight="bold">5</text></svg>
+          <button id="btn-skip-back" class="ctrl-btn" title="Jump Back 1s (⌘←)">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12.5 3C7.81 3 4 6.81 4 11.5H1l4 4 4-4H6c0-3.59 2.91-6.5 6.5-6.5S19 7.91 19 11.5 16.09 18 12.5 18v2c4.69 0 8.5-3.81 8.5-8.5S17.19 3 12.5 3z"/><text x="9" y="14.5" font-size="6" font-weight="bold">1</text></svg>
           </button>
-          <button id="btn-prev-frame" class="ctrl-btn" title="Previous Frame (⌘←)">
+          <button id="btn-prev-frame" class="ctrl-btn" title="Previous Frame (←)">
             <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6V6zm3.5 6 8.5 6V6l-8.5 6z"/></svg>
           </button>
           <button id="btn-play" class="ctrl-btn ctrl-btn-play" title="Play/Pause (Space)">
             <svg id="icon-play" viewBox="0 0 24 24" fill="currentColor"><polygon points="8,5 8,19 19,12"/></svg>
             <svg id="icon-pause" viewBox="0 0 24 24" fill="currentColor" class="hidden"><path d="M6 5h4v14H6V5zm8 0h4v14h-4V5z"/></svg>
           </button>
-          <button id="btn-next-frame" class="ctrl-btn" title="Next Frame (⌘→)">
+          <button id="btn-next-frame" class="ctrl-btn" title="Next Frame (→)">
             <svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 18h2V6h-2v12zM4 18l8.5-6L4 6v12z"/></svg>
           </button>
-          <button id="btn-skip-fwd" class="ctrl-btn" title="Skip Forward 5s (→)">
-            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M11.5 3c4.69 0 8.5 3.81 8.5 8.5h3l-4 4-4-4h3c0-3.59-2.91-6.5-6.5-6.5S5 7.91 5 11.5 7.91 18 11.5 18v2C6.81 20 3 16.19 3 11.5S6.81 3 11.5 3z"/><text x="8.5" y="14.5" font-size="6" font-weight="bold">5</text></svg>
+          <button id="btn-skip-fwd" class="ctrl-btn" title="Jump Forward 1s (⌘→)">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M11.5 3c4.69 0 8.5 3.81 8.5 8.5h3l-4 4-4-4h3c0-3.59-2.91-6.5-6.5-6.5S5 7.91 5 11.5 7.91 18 11.5 18v2C6.81 20 3 16.19 3 11.5S6.81 3 11.5 3z"/><text x="8.5" y="14.5" font-size="6" font-weight="bold">1</text></svg>
           </button>
           <button id="btn-loop" class="ctrl-btn" title="Loop Playback: Off (⌘L)" aria-pressed="false">
             <svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/></svg>
@@ -272,8 +272,8 @@
         <div class="shortcut-row"><kbd>Space</kbd> / <kbd>K</kbd><span>Play / Pause</span></div>
         <div class="shortcut-row"><kbd>J</kbd> / <kbd>L</kbd><span>Shuttle back / forward — tap again to speed up (2x–8x), tap the other key to step back down</span></div>
         <div class="shortcut-row"><kbd>K</kbd>+<kbd>J</kbd> / <kbd>K</kbd>+<kbd>L</kbd><span>Slow shuttle (half speed)</span></div>
-        <div class="shortcut-row"><kbd>←</kbd> / <kbd>→</kbd><span>Skip 5s back / forward</span></div>
-        <div class="shortcut-row"><kbd>⌘←</kbd> / <kbd>⌘→</kbd><span>Frame back / forward</span></div>
+        <div class="shortcut-row"><kbd>←</kbd> / <kbd>→</kbd><span>Frame back / forward</span></div>
+        <div class="shortcut-row"><kbd>⌘←</kbd> / <kbd>⌘→</kbd><span>Jump 1s back / forward</span></div>
         <div class="shortcut-row"><kbd>↑</kbd> / <kbd>↓</kbd><span>Volume up / down</span></div>
         <div class="shortcut-row"><kbd>⌘L</kbd><span>Loop playback on / off</span></div>
         <div class="shortcut-row"><kbd>M</kbd><span>Mute / Unmute</span></div>
@@ -282,7 +282,7 @@
         <div class="shortcut-row"><kbd>⌘O</kbd><span>Open file</span></div>
         <div class="shortcut-row"><kbd>⌘I</kbd><span>File information</span></div>
         <div class="shortcut-row"><kbd>⌘G</kbd><span>GOP / data rate strip</span></div>
-        <div class="shortcut-row"><kbd>⌘L</kbd><span>Audio meters &amp; loudness</span></div>
+        <div class="shortcut-row"><kbd>⌘⇧L</kbd><span>Audio meters &amp; loudness</span></div>
         <div class="shortcut-row"><kbd>⌘⇧C</kbd><span>Load caption / subtitle file</span></div>
         <div class="shortcut-row"><kbd>⌘⇧A</kbd><span>Load secondary audio</span></div>
       </div>

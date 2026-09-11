@@ -16,8 +16,8 @@ A professional, cross-platform desktop video player built with Electron. Feature
 - Volume control with mute toggle
 - Native fullscreen mode
 - Frame-by-frame navigation (forward & backward)
-- Loop playback (⌘L, or Playback ▸ Loop Playback) — repeats seamlessly, which
-  matters for image-sequence review and screening-room checks
+- Loop playback — repeats seamlessly, which matters for image-sequence review
+  and screening-room checks
 
 #### Timecode Display
 - Real-time HH:MM:SS:FF timecode (Hours:Minutes:Seconds:Frames)
@@ -63,7 +63,7 @@ Deep inspection via ffprobe, in a summary view with an expandable **Advanced** s
 - Overlay renders over picture in transcoded and streamed playback alike
 - Malformed caption files report a specific parse error instead of failing silently
 
-#### Audio Meters & Loudness (`⌘L` / `Ctrl+L`)
+#### Audio Meters & Loudness (`⌘⇧L` / `Ctrl+Shift+L`)
 - Always-on channel meters docked to the right of the picture — one thin bar per
   channel, so the track count and layout (STEREO, 5.1, …) are readable at a glance.
   Fades with the transport bar when the mouse goes idle
@@ -88,8 +88,10 @@ Deep inspection via ffprobe, in a summary view with an expandable **Advanced** s
 | `Space` / `K` | Play / Pause |
 | `J` / `L` | Shuttle backward / forward (Premiere/FCP-style — tap again to ramp 2x–8x, tap the other key to step back down) |
 | `K`+`J` / `K`+`L` | Slow shuttle (half speed) |
-| `←` / `→` | Skip 5 seconds backward / forward |
-| `⌘←` / `⌘→` (or `Ctrl`) | Frame-by-frame backward / forward |
+| `←` / `→` | Frame-by-frame backward / forward |
+| `⌘←` / `⌘→` (or `Ctrl`) | Jump 1 second backward / forward |
+| `⌘L` (or `Ctrl+L`) | Loop playback on / off |
+| `⌘⇧L` (or `Ctrl+Shift+L`) | Audio meters & loudness |
 | `↑` / `↓` | Volume up / down |
 | `M` | Mute / Unmute |
 | `F` | Toggle fullscreen |

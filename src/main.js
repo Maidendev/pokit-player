@@ -180,30 +180,30 @@ function buildMenu() {
         },
         { type: 'separator' },
         {
-          label: 'Skip Forward 5s',
-          ...hint('Right'),
+          label: 'Jump Forward 1s',
+          ...hint('CmdOrCtrl+Right'),
           click: () => {
-            if (mainWindow) mainWindow.webContents.send('seek-relative', 5);
+            if (mainWindow) mainWindow.webContents.send('seek-relative', 1);
           },
         },
         {
-          label: 'Skip Backward 5s',
-          ...hint('Left'),
+          label: 'Jump Backward 1s',
+          ...hint('CmdOrCtrl+Left'),
           click: () => {
-            if (mainWindow) mainWindow.webContents.send('seek-relative', -5);
+            if (mainWindow) mainWindow.webContents.send('seek-relative', -1);
           },
         },
         { type: 'separator' },
         {
           label: 'Next Frame',
-          ...hint('CmdOrCtrl+Right'),
+          ...hint('Right'),
           click: () => {
             if (mainWindow) mainWindow.webContents.send('frame-step', 1);
           },
         },
         {
           label: 'Previous Frame',
-          ...hint('CmdOrCtrl+Left'),
+          ...hint('Left'),
           click: () => {
             if (mainWindow) mainWindow.webContents.send('frame-step', -1);
           },
@@ -276,7 +276,9 @@ function buildMenu() {
         },
         {
           label: 'Audio Meters & Loudness',
-          accelerator: 'CmdOrCtrl+L',
+          // Cmd/Ctrl+L now belongs to Loop Playback. Shift+L keeps the "L for
+          // loudness" mnemonic and is one modifier away from the old key.
+          accelerator: 'CmdOrCtrl+Shift+L',
           click: () => {
             if (mainWindow) mainWindow.webContents.send('toggle-audio-panel');
           },

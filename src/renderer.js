@@ -109,6 +109,7 @@
   // ─── MSE Streaming State (v1.1.0) ─────────────────────
   let streamMode = false;           // true when using MSE streaming playback
   let loopEnabled = false;          // Loop Playback — see toggleLoop()
+  const JUMP_SECONDS = 1;           // Cmd/Ctrl-arrow and the skip buttons
   let mediaSource = null;           // MediaSource instance
   let sourceBuffer = null;          // SourceBuffer for fMP4 data
   let pendingBuffers = [];          // Queue of ArrayBuffers waiting to be appended
@@ -1312,8 +1313,8 @@
 
   btnPlay.addEventListener('click', togglePlay);
   bigPlayBtn.addEventListener('click', togglePlay);
-  btnSkipBack.addEventListener('click', () => seekRelative(-5));
-  btnSkipFwd.addEventListener('click', () => seekRelative(5));
+  btnSkipBack.addEventListener('click', () => seekRelative(-JUMP_SECONDS));
+  btnSkipFwd.addEventListener('click', () => seekRelative(JUMP_SECONDS));
   btnPrevFrame.addEventListener('click', () => frameStep(-1));
   btnNextFrame.addEventListener('click', () => frameStep(1));
   btnLoop.addEventListener('click', () => toggleLoop());
@@ -1488,13 +1489,16 @@
     }
 
     switch (e.code) {
+      // Bare arrows step a frame at a time; Cmd/Ctrl-arrow jumps a second.
+      // Frame stepping is the move an operator makes constantly, so it gets
+      // the unmodified key.
       case 'ArrowLeft':
         e.preventDefault();
-        if (e.ctrlKey || e.metaKey) frameStep(-1); else seekRelative(-5);
+        if (e.ctrlKey || e.metaKey) seekRelative(-JUMP_SECONDS); else frameStep(-1);
         break;
       case 'ArrowRight':
         e.preventDefault();
-        if (e.ctrlKey || e.metaKey) frameStep(1); else seekRelative(5);
+        if (e.ctrlKey || e.metaKey) seekRelative(JUMP_SECONDS); else frameStep(1);
         break;
       case 'ArrowUp': e.preventDefault(); changeVolume(0.05); break;
       case 'ArrowDown': e.preventDefault(); changeVolume(-0.05); break;
@@ -1509,13 +1513,10 @@
         }
         break;
       case 'KeyL':
-        // Bare L is shuttle forward (J/K/L); Cmd-L is Loop, as in QuickTime.
-        if ((e.metaKey || e.ctrlKey) && !e.altKey) {
-          if (!e.repeat) { e.preventDefault(); toggleLoop(); }
-        } else if (!mod && !e.repeat) {
-          e.preventDefault();
-          if (kHeld) slowShuttle(1); else shuttleForward();
-        }
+        // Bare L only. Cmd/Ctrl-L for Loop is a REGISTERED menu accelerator
+        // (see main.js), and registered accelerators are not also handled
+        // here — doing both fires toggleLoop twice and cancels itself out.
+        if (!mod && !e.repeat) { e.preventDefault(); if (kHeld) slowShuttle(1); else shuttleForward(); }
         break;
       case 'KeyF': if (!mod) { e.preventDefault(); toggleFullscreen(); } break;
       case 'KeyM': if (!mod) { e.preventDefault(); toggleMute(); } break;
