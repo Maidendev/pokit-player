@@ -822,7 +822,11 @@ ipcMain.handle('sdi-start', async (_event, opts) => {
                     ' at ' + opts.fps + ' fps over SDI.' };
   }
 
-  if (sdiOutput) sdiOutput.stop();
+  // The previous helper owns the card. Let it exit — and the driver release
+  // the output — before the next one asks for it, or that one fails with
+  // "another application is using this device" and the badge goes red. A
+  // seek or a loop toggle is exactly this restart.
+  if (sdiOutput) await sdiOutput.stop();
   sdiOutput = new sdi.SdiOutput();
 
   const send = (payload) => { if (mainWindow) mainWindow.webContents.send('sdi-status', payload); };

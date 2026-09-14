@@ -37,7 +37,19 @@ cannot take the player down mid-screening.
 
 **Loop is ffmpeg's job.** `-stream_loop -1` re-reads the input seamlessly, so
 the card sees one continuous stream and nothing has to hold a clip in RAM — at
-4K DCI that would be 24 MB a frame.
+4K DCI that would be 24 MB a frame. One trap: `-stream_loop` returns to where
+*its input* began, so Loop switched on mid-clip would repeat from that point
+forever. When playback is not at the start, the decode is two inputs joined by
+the `concat` filter — the remainder from here, then the whole clip looping —
+verified frame by frame (5…10, then 1…10, 1…10 …) on ffmpeg 6.1 and 9.0.
+
+**A seek or a loop toggle restarts the session — gracefully.** The player
+sends `stop`, waits for this process to exit (it stops the schedule, disables
+the output and leaves on its own — 11 ms against the stub), and only then
+starts the next one. Starting the next helper while the previous was still
+dying made `EnableVideoOutput` fail with "another application is using this
+device", and the badge went red. The helper also retries `EnableVideoOutput`
+for up to two seconds, for whatever release delay the driver still has.
 
 ## What the helper does that is not obvious
 

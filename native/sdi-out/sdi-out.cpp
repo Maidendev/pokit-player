@@ -54,6 +54,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <cstdio>
@@ -541,7 +542,20 @@ class Player {
                    cardRowBytes_, ffRowBytes_);
     }
 
-    if (out_->EnableVideoOutput(mode_->GetDisplayMode(), bmdVideoOutputFlagDefault) != S_OK) {
+    // A seek or a loop toggle in the player restarts this process, and the
+    // driver can still be releasing the output from the helper that just
+    // exited when this one asks for it. Nothing is on the card yet, so waiting
+    // is invisible; only after two seconds is it really another application.
+    HRESULT enabled = E_FAIL;
+    for (int attempt = 0; attempt < 20; ++attempt) {
+      enabled = out_->EnableVideoOutput(mode_->GetDisplayMode(), bmdVideoOutputFlagDefault);
+      if (enabled == S_OK) break;
+      if (attempt == 0)
+        std::fprintf(stderr, "sdi-out: video output not yet available (0x%08x) — waiting for the device to be released\n",
+                     static_cast<unsigned>(enabled));
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    if (enabled != S_OK) {
       fail("could not enable video output — is another application already using this device?");
       return false;
     }

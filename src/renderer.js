@@ -1511,6 +1511,9 @@
       opts.source = currentSeqInfo.pattern;
       opts.isImageSequence = true;
       opts.startFrame = currentSeqInfo.startFrame + Math.round((video.currentTime || 0) * fps);
+      // Where the sequence BEGINS, so a loop can go back to it rather than to
+      // wherever playback happened to be when Loop was switched on.
+      opts.firstFrame = currentSeqInfo.startFrame;
     } else {
       opts.source = originalFilePath;
       opts.startTime = video.currentTime || 0;

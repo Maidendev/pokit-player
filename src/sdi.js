@@ -254,8 +254,11 @@ function matchModeForSource(source, supported) {
  * @param {string} opts.source          File path, or an image-sequence pattern.
  * @param {object} opts.mode            One of MODES.
  * @param {boolean} [opts.isImageSequence]
- * @param {number} [opts.startFrame]    Image sequences only — first frame number.
+ * @param {number} [opts.startFrame]    Image sequences only — frame to start FROM.
+ * @param {number} [opts.firstFrame]    Image sequences only — where the sequence BEGINS,
+ *                                      so a loop can return to it. Defaults to startFrame.
  * @param {number} [opts.startTime]     Everything else — seek position in seconds.
+ * @param {boolean} [opts.loop]
  * @returns {string[]}
  */
 function buildDecodeArgs(opts) {
@@ -263,32 +266,51 @@ function buildDecodeArgs(opts) {
   if (!source) throw new Error('buildDecodeArgs: source is required');
   if (!mode) throw new Error('buildDecodeArgs: mode is required');
 
-  const args = [];
+  // Fit to the mode without cropping or stretching: scale to fit, then pad to
+  // the exact raster. force_original_aspect_ratio keeps the framing intact.
+  const fit =
+    'scale=' + mode.width + ':' + mode.height + ':force_original_aspect_ratio=decrease,' +
+    'pad=' + mode.width + ':' + mode.height + ':(ow-iw)/2:(oh-ih)/2,' +
+    'format=yuv422p10le';
+
+  // The input, from the current position.
+  const fromHere = [];
+  if (opts.isImageSequence) {
+    // The rate has to be declared: a sequence of stills carries none.
+    fromHere.push('-framerate', mode.fpsRational);
+    if (opts.startFrame !== undefined) fromHere.push('-start_number', String(opts.startFrame));
+  } else if (opts.startTime > 0) {
+    fromHere.push('-ss', String(opts.startTime));
+  }
+  fromHere.push('-i', source);
 
   // Loop playback belongs to ffmpeg, not the helper: -stream_loop re-reads the
   // input seamlessly, so the card sees one continuous stream and nothing has
   // to hold a clip in memory — at 4K DCI that would be 24 MB a frame.
-  if (opts.loop) args.push('-stream_loop', '-1');
+  //
+  // But -stream_loop returns to where ITS input began — the -ss or
+  // -start_number above — so Loop switched on mid-clip would repeat from that
+  // point forever. When playback is not at the start, the clip is therefore
+  // two inputs joined by the concat filter: the remainder from here, then the
+  // whole clip looping. Checked frame by frame on ffmpeg 6.1 and 9.0: a
+  // sequence started at frame 5 plays 5…10, then 1…10, 1…10, and the v210
+  // byte count through the full scale/pad chain is whole frames exactly.
+  const atStart = opts.isImageSequence
+    ? (opts.startFrame === undefined || opts.firstFrame === undefined || opts.startFrame <= opts.firstFrame)
+    : !(opts.startTime > 0);
 
-  if (opts.isImageSequence) {
-    // The rate has to be declared: a sequence of stills carries none.
-    args.push('-framerate', mode.fpsRational);
-    if (opts.startFrame !== undefined) args.push('-start_number', String(opts.startFrame));
-    args.push('-i', source);
+  const args = [];
+  if (!opts.loop) {
+    args.push(...fromHere, '-vf', fit);
+  } else if (atStart) {
+    args.push('-stream_loop', '-1', ...fromHere, '-vf', fit);
   } else {
-    if (opts.startTime > 0) args.push('-ss', String(opts.startTime));
-    args.push('-i', source);
+    const fromStart = ['-stream_loop', '-1'];
+    if (opts.isImageSequence) fromStart.push('-framerate', mode.fpsRational, '-start_number', String(opts.firstFrame));
+    fromStart.push('-i', source);
+    args.push(...fromHere, ...fromStart, '-filter_complex', '[0:v][1:v]concat=n=2:v=1:a=0,' + fit);
   }
-
-  // Fit to the mode without cropping or stretching: scale to fit, then pad to
-  // the exact raster. force_original_aspect_ratio keeps the framing intact.
-  args.push(
-    '-vf',
-    'scale=' + mode.width + ':' + mode.height + ':force_original_aspect_ratio=decrease,' +
-      'pad=' + mode.width + ':' + mode.height + ':(ow-iw)/2:(oh-ih)/2,' +
-      'format=yuv422p10le',
-    '-r', mode.fpsRational,
-  );
+  args.push('-r', mode.fpsRational);
 
   // v210 is what the card takes natively, so this is the last conversion.
   args.push('-c:v', 'v210', '-an', '-f', 'rawvideo', 'pipe:1');
@@ -422,8 +444,10 @@ async function listDevices() {
 
 /**
  * One SDI playout: ffmpeg decoding to v210, piped into sdi-out, which owns the
- * clock. Seeking is a restart (stop, then start at the new position), the same
- * way the stream decoder handles it; pause and resume go over the control
+ * clock. Seeking — and toggling Loop — is a restart (stop, then start at the
+ * new position), the same way the stream decoder handles it. The stop is
+ * awaited: the helper owns the card, and the next one cannot have it until
+ * this one has let go (see stop()). Pause and resume go over the control
  * channel so the picture holds on the projector instead of going black.
  */
 class SdiOutput {
@@ -479,7 +503,12 @@ class SdiOutput {
     this.decoder.stdout.on('error', (e) => { if (e && e.code !== 'EPIPE') console.error('[SDI] decoder stdout:', e.message); });
 
     let stderrTail = '';
+    const thisHelper = this.helper;
     this.helper.stderr.on('data', (d) => {
+      // A helper that has been stopped can still say `status:stopped` on its
+      // way out, after the NEXT session has already started. That must not be
+      // mistaken for the new session ending.
+      if (this.helper !== thisHelper) return;
       const text = d.toString();
       for (const line of text.split('\n')) {
         if (!line) continue;
@@ -533,14 +562,46 @@ class SdiOutput {
   pause()  { this.control('pause'); }
   resume() { this.control('play'); }
 
+  /**
+   * Stop, and resolve once the helper has actually exited — so whoever is
+   * about to start the next session (a seek, a loop toggle) knows the card
+   * has been let go of. Starting the next helper while this one is still
+   * dying made EnableVideoOutput fail with "another application is using
+   * this device", and the badge went red.
+   *
+   * The helper is asked, not killed: `stop` on the control channel makes it
+   * stop the schedule, disable the output and exit 0 by itself. Only if it
+   * has not gone in a second is it killed. Safe to call twice, or idle.
+   */
   stop() {
-    if (!this.active && !this.helper) return;
+    const h = this.helper;
+    if (!this.active && !h) return Promise.resolve();
     this.active = false;
     this.control('stop');
-    this.teardown();
+    this.teardown({ graceful: true });
+    if (!h) return Promise.resolve();
+
+    return new Promise((resolve) => {
+      let timer = null;
+      const done = () => { clearTimeout(timer); resolve(); };
+      timer = setTimeout(() => {
+        console.warn('[SDI] helper did not exit after stop — killing it');
+        try { h.kill('SIGKILL'); } catch (_) { /* already gone */ }
+        done();
+      }, 1000);
+      h.once('exit', done);
+      if (h.exitCode !== null || h.signalCode !== null) done();   // gone before we looked
+    });
   }
 
-  teardown() {
+  /**
+   * Forget both processes. The decoder is always killed — it is only ffmpeg
+   * writing to a pipe. The helper is asked to leave when the stop was ours
+   * (graceful), or made to when it was not — a session ending because the
+   * helper died, or a caller that never awaits.
+   */
+  teardown(opts) {
+    const graceful = !!(opts && opts.graceful);
     this.active = false;
     if (this.decoder) {
       try { this.decoder.stdout.unpipe(); this.decoder.kill('SIGKILL'); } catch (_) { /* ignore */ }
@@ -551,8 +612,12 @@ class SdiOutput {
       this.helper = null;
       try { h.removeAllListeners('exit'); } catch (_) { /* ignore */ }
       // Close what we hold, or the child's pipes linger in this process.
-      for (const st of [h.stdin, h.stdio[3]]) { try { if (st) st.destroy(); } catch (_) { /* ignore */ } }
-      try { h.kill('SIGTERM'); } catch (_) { /* ignore */ }
+      // stdin is destroyed — whatever frames were queued are not wanted, and
+      // the closed pipe is EOF to the helper's reader. The control channel is
+      // ENDED, not destroyed, so the `stop` just written actually arrives.
+      try { if (h.stdin) h.stdin.destroy(); } catch (_) { /* ignore */ }
+      try { if (h.stdio[3]) h.stdio[3].end(); } catch (_) { /* ignore */ }
+      if (!graceful) { try { h.kill('SIGTERM'); } catch (_) { /* ignore */ } }
     }
   }
 
