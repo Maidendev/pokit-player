@@ -57,7 +57,12 @@ function sdiOutputSubmenu() {
     },
   ];
   if (sdiDevices.length === 0) {
-    items.push({ label: 'No Blackmagic device found', enabled: false });
+    // "Found but unusable" and "not found" have different fixes; do not let
+    // them share a label.
+    items.push({
+      label: sdiDevicesSeen() > 0 ? 'Blackmagic device found, but it has no usable output' : 'No Blackmagic device found',
+      enabled: false,
+    });
     // Put the helper's own one-line reason right in the menu, so the first
     // screenshot from a screening room already says why.
     const reason = sdiScanReason();
@@ -84,6 +89,12 @@ function sdiScanReason() {
   const failLine = (sdiLastScan.stderr || '').split('\n').map((l) => l.trim())
     .filter((l) => l.startsWith('sdi-out:')).pop();
   return failLine ? failLine.replace(/^sdi-out:\s*/, '').slice(0, 90) : null;
+}
+
+/** How many devices the driver reported in the last scan, usable or not. */
+function sdiDevicesSeen() {
+  const m = /diag:devices-seen (\d+)/.exec((sdiLastScan && sdiLastScan.stderr) || '');
+  return m ? parseInt(m[1], 10) : 0;
 }
 
 /**
@@ -113,7 +124,9 @@ async function showSdiDiagnostics() {
     title: 'External Video Output — Diagnostics',
     message: r.devices && r.devices.length
       ? r.devices.length + ' Blackmagic device(s) found'
-      : 'No Blackmagic device found',
+      : sdiDevicesSeen() > 0
+        ? sdiDevicesSeen() + ' Blackmagic device(s) found, but none can be used for output — see the reason below'
+        : 'No Blackmagic device found',
     detail,
     buttons: ['Copy to Clipboard', 'Close'],
     defaultId: 0,

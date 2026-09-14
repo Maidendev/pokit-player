@@ -60,6 +60,19 @@ the card sees one continuous stream and nothing has to hold a clip in RAM — at
 - **The cushion is deep on purpose.** `--buffer-frames` (default 24, one second
   at 24 fps) is how many frames sit on the card ahead of the clock; half are
   prerolled before it starts. The cost is RAM — about 570 MB at 4K DCI.
+- **It speaks two generations of the driver.** The helper is compiled with SDK
+  16.0's interface IDs, and Blackmagic gives an interface a *new* ID every time
+  its vtable changes. A driver answers the IDs of its own generation and older,
+  never newer — so on Desktop Video 14.5, `QueryInterface(IID_IDeckLinkOutput)`
+  fails for *every* device and a working UltraStudio looks capture-only. That
+  is exactly what happened on the first rig. So `IDeckLinkOutput`,
+  `IDeckLinkVideoBuffer` and `IDeckLinkProfileAttributes` are each asked for
+  by the 16.0 ID and then the 15.3.1-generation ID (Desktop Video 14.3 → 15.3.x).
+  `IDeckLinkOutput` and the attributes are vtable-compatible and are used
+  through the 16.0 type; `IDeckLinkVideoBuffer` is **not** (16.0 inserted
+  `GetSize`), so the old object is driven through the old type. Drivers at
+  14.2.1 or older have a different `IDeckLinkOutput` again and are refused
+  with the version named, not attempted.
 
 ## CLI contract
 
@@ -155,6 +168,22 @@ The same output from a terminal, on any build:
 ```
 "/Applications/MaidenPlayer.app/Contents/Resources/app.asar.unpacked/src/bin/sdi-out" --list-devices; echo "exit=$?"
 ```
+
+Reading the `diag:` lines:
+
+| Line | Means |
+|---|---|
+| `helper-sdk 16.0` | The SDK this binary was compiled with. |
+| `desktop-video-api 14.5` | The driver actually installed. |
+| `driver-generation current` | Same generation; nothing special. |
+| `driver-generation older-than-helper` | Driver is 14.3 → 15.3.x. Works — through the previous-generation interface IDs. |
+| `driver-generation too-old` | Driver is 14.2.1 or older. Cannot be driven; update Desktop Video. |
+| `device N "name" model="…" io=… duplex=… output=…` | One per device the driver reported, **listed or not**. `io` is the card's own capability (`capture`, `playback`, both); `duplex=inactive` means the sub-device is switched off in its Desktop Video Setup profile; `output=no` is the one to look at. |
+| `devices-seen N` | How many the driver reported, so "found but unusable" is distinguishable from "not found". |
+
+The one-line `sdi-out:` reason that follows picks the fix that matches: update
+Desktop Video, swap in an output-capable device, or change the profile in
+Desktop Video Setup.
 
 How the API reaches the hardware, for reference: `DeckLinkAPI.framework` talks
 to the driver over an XPC service, `com.blackmagic-design.desktopvideo.DeckLinkHardwareXPCService`.

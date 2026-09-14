@@ -33,8 +33,17 @@
 //     after stopping the schedule, so a paused review does not drop to black.
 //     Frames that were scheduled but not yet shown are flushed by the card and
 //     lost; resume prerolls fresh ones. A few frames skip on resume — accepted.
+//
+//  5. The driver on the rig may be OLDER than the SDK this was built with, and
+//     Blackmagic gives an interface a new IID every time its vtable changes, so
+//     an old driver answers E_NOINTERFACE to a new IID. That made a working
+//     UltraStudio look "capture-only" on Desktop Video 14.5. The interfaces
+//     that changed between 15.3.1 and 16.0 are therefore asked for by both
+//     IIDs — see "Driver generations" below.
 
 #include "DeckLinkAPI.h"
+#include "DeckLinkAPIVersion.h"
+#include "DeckLinkAPIVideoOutput_v15_3_1.h"   // previous-generation IIDs and types; pulls in DeckLinkAPI_v15_3_1.h
 
 #include <CoreFoundation/CoreFoundation.h>
 #include <dlfcn.h>
@@ -136,6 +145,140 @@ bool readFully(int fd, void* dst, size_t n) {
 }
 
 // ---------------------------------------------------------------------------
+// Driver generations
+// ---------------------------------------------------------------------------
+//
+// This helper is compiled with SDK 16.0's IIDs. Desktop Video answers
+// QueryInterface for the IIDs of its own generation and OLDER ones, never
+// newer: a 14.5 driver has never heard of 16.0's IID_IDeckLinkOutput and says
+// E_NOINTERFACE for every device, output-capable or not. Screening rooms pin
+// Desktop Video to whatever their Resolve wants, so old drivers are the norm,
+// not the exception.
+//
+// Between 15.3.1 and 16.0 the interfaces used here changed as follows:
+//
+//   IDeckLinkOutput            Same vtable (one parameter's pointer type was
+//                              renamed). The 16.0 type is used through the
+//                              old IID.
+//   IDeckLinkVideoBuffer       16.0 INSERTED GetSize between GetBytes and
+//                              StartAccess, so the old object has to be
+//                              driven through the old type — FrameBytes does.
+//   IDeckLinkProfileAttributes 16.0 only APPENDED a method; the 16.0 type
+//                              reads the old object.
+//
+// The generation before that (IDeckLinkOutput_v14_2_1, Desktop Video 14.2.1
+// and older) has a different vtable again and no IDeckLinkVideoBuffer at all.
+// It is not attempted; the diagnostics name the installed version instead.
+
+// The oldest driver this helper can drive: the first release after 14.2.1.
+// Packed like BLACKMAGIC_DECKLINK_API_VERSION, 0xMMmmpp00.
+constexpr int64_t kOldestDrivableApi = 0x0E020200;
+int64_t gInstalledApi = 0;             // packed; 0 when the API is not loaded
+std::string gInstalledApiString;       // e.g. "14.5", for messages
+
+/** Read the installed API version once. Both stay 0/empty when it is not loaded. */
+void readInstalledApiVersion() {
+  if (gInstalledApi) return;
+  if (IDeckLinkAPIInformation* info = CreateDeckLinkAPIInformationInstance()) {
+    int64_t v = 0;
+    if (info->GetInt(BMDDeckLinkAPIVersion, &v) == S_OK) gInstalledApi = v;
+    CFStringRef s = nullptr;
+    if (info->GetString(BMDDeckLinkAPIVersion, &s) == S_OK && s) { gInstalledApiString = cfToStd(s); CFRelease(s); }
+    info->Release();
+  }
+}
+
+bool driverOlderThanHelper() { return gInstalledApi != 0 && gInstalledApi < BLACKMAGIC_DECKLINK_API_VERSION; }
+bool driverTooOldToDrive()   { return gInstalledApi != 0 && gInstalledApi < kOldestDrivableApi; }
+
+/**
+ * IDeckLink -> IDeckLinkOutput, asking with this SDK's IID first and then the
+ * previous generation's. NULL when the device truly has no output — or when
+ * the driver predates both IIDs, which driverTooOldToDrive() tells apart.
+ */
+IDeckLinkOutput* queryOutput(IDeckLink* dl, const char** generation = nullptr) {
+  void* p = nullptr;
+  if (dl->QueryInterface(IID_IDeckLinkOutput, &p) == S_OK && p) {
+    if (generation) *generation = "16.0";
+    return static_cast<IDeckLinkOutput*>(p);
+  }
+  p = nullptr;
+  if (dl->QueryInterface(IID_IDeckLinkOutput_v15_3_1, &p) == S_OK && p) {
+    if (generation) *generation = "15.3.1-compatible";
+    return static_cast<IDeckLinkOutput*>(p);
+  }
+  return nullptr;
+}
+
+/** A frame's pixel buffer, through whichever generation of interface the driver hands out. */
+class FrameBytes {
+ public:
+  ~FrameBytes() {
+    if (cur_) cur_->Release();
+    if (old_) old_->Release();
+  }
+  bool open(IDeckLinkVideoFrame* f) {
+    void* p = nullptr;
+    if (f->QueryInterface(IID_IDeckLinkVideoBuffer, &p) == S_OK && p) {
+      cur_ = static_cast<IDeckLinkVideoBuffer*>(p);
+      return true;
+    }
+    p = nullptr;
+    if (f->QueryInterface(IID_IDeckLinkVideoBuffer_v15_3_1, &p) == S_OK && p) {
+      old_ = static_cast<IDeckLinkVideoBuffer_v15_3_1*>(p);
+      return true;
+    }
+    return false;
+  }
+  HRESULT StartAccess(BMDBufferAccessFlags fl) { return cur_ ? cur_->StartAccess(fl) : old_->StartAccess(fl); }
+  HRESULT GetBytes(void** bytes)               { return cur_ ? cur_->GetBytes(bytes)  : old_->GetBytes(bytes); }
+  HRESULT EndAccess(BMDBufferAccessFlags fl)   { return cur_ ? cur_->EndAccess(fl)    : old_->EndAccess(fl); }
+
+ private:
+  IDeckLinkVideoBuffer* cur_ = nullptr;
+  IDeckLinkVideoBuffer_v15_3_1* old_ = nullptr;
+};
+
+/**
+ * What a device can do, from its profile attributes. Fields keep their
+ * defaults when the driver will not say.
+ */
+struct DeviceCaps {
+  bool known = false;                    // VideoIOSupport was reported
+  bool capture = false, playback = false;
+  int64_t duplex = 0;                    // BMDDuplexMode FourCC, 0 if not reported
+};
+
+DeviceCaps queryCaps(IDeckLink* dl) {
+  DeviceCaps c;
+  void* p = nullptr;
+  if (dl->QueryInterface(IID_IDeckLinkProfileAttributes, &p) != S_OK || !p) {
+    p = nullptr;
+    if (dl->QueryInterface(IID_IDeckLinkProfileAttributes_v15_3_1, &p) != S_OK || !p) return c;
+  }
+  auto* attrs = static_cast<IDeckLinkProfileAttributes*>(p);
+  int64_t io = 0;
+  if (attrs->GetInt(BMDDeckLinkVideoIOSupport, &io) == S_OK) {
+    c.known = true;
+    c.capture  = (io & bmdDeviceSupportsCapture)  != 0;
+    c.playback = (io & bmdDeviceSupportsPlayback) != 0;
+  }
+  attrs->GetInt(BMDDeckLinkDuplex, &c.duplex);
+  attrs->Release();
+  return c;
+}
+
+std::string duplexName(int64_t d) {
+  switch (d) {
+    case bmdDuplexFull:     return "full";
+    case bmdDuplexHalf:     return "half";
+    case bmdDuplexSimplex:  return "simplex";
+    case bmdDuplexInactive: return "inactive";
+    default:                return d ? fourccToString(uint32_t(d)) : "unreported";
+  }
+}
+
+// ---------------------------------------------------------------------------
 // --list-devices
 // ---------------------------------------------------------------------------
 
@@ -179,16 +322,24 @@ void emitDiagnostics(bool apiLoaded) {
     else   std::fprintf(stderr, "diag:dlopen failed: %s\n", ::dlerror());
   }
 
-  if (IDeckLinkAPIInformation* info = CreateDeckLinkAPIInformationInstance()) {
-    CFStringRef v = nullptr;
-    if (info->GetString(BMDDeckLinkAPIVersion, &v) == S_OK && v) {
-      std::fprintf(stderr, "diag:desktop-video-api %s\n", cfToStd(v).c_str());
-      CFRelease(v);
-    }
-    info->Release();
-  } else {
-    std::fprintf(stderr, "diag:desktop-video-api unavailable\n");
-  }
+  readInstalledApiVersion();
+  if (gInstalledApi) std::fprintf(stderr, "diag:desktop-video-api %s\n", gInstalledApiString.c_str());
+  else               std::fprintf(stderr, "diag:desktop-video-api unavailable\n");
+
+  // The SDK this binary was compiled with, beside the driver it found. When
+  // the driver is the older of the two its interfaces are asked for by their
+  // previous-generation IIDs (see "Driver generations"); older than THAT and
+  // nothing can be driven, which is said here rather than left to look like a
+  // capture-only card.
+  std::fprintf(stderr, "diag:helper-sdk %s\n", BLACKMAGIC_DECKLINK_API_VERSION_STRING);
+  if (driverTooOldToDrive())
+    std::fprintf(stderr, "diag:driver-generation too-old (Desktop Video %s predates the interfaces this build can use; update it to %s or newer)\n",
+                 gInstalledApiString.c_str(), BLACKMAGIC_DECKLINK_API_VERSION_STRING);
+  else if (driverOlderThanHelper())
+    std::fprintf(stderr, "diag:driver-generation older-than-helper (Desktop Video %s < SDK %s; using previous-generation interface IDs)\n",
+                 gInstalledApiString.c_str(), BLACKMAGIC_DECKLINK_API_VERSION_STRING);
+  else if (gInstalledApi)
+    std::fprintf(stderr, "diag:driver-generation current\n");
 #if defined(__arm64__)
   std::fprintf(stderr, "diag:helper-arch arm64\n");
 #else
@@ -220,18 +371,36 @@ int listDevices() {
   std::printf("[");
   IDeckLink* dl = nullptr;
   int index = 0;      // iterator position — what --device takes
+  int listed = 0;
   bool first = true;
+  // Why each skipped device was skipped, for the one-line reason at the end.
+  bool sawCaptureOnly = false, sawInactive = false, sawUnexplained = false;
 
   while (it->Next(&dl) == S_OK) {
-    IDeckLinkOutput* out = nullptr;
+    std::string name, model;
+    CFStringRef cf = nullptr;
+    if (dl->GetDisplayName(&cf) == S_OK && cf) { name = cfToStd(cf); CFRelease(cf); cf = nullptr; }
+    if (dl->GetModelName(&cf) == S_OK && cf)   { model = cfToStd(cf); CFRelease(cf); cf = nullptr; }
+
     // Capture-only devices have no output interface and are skipped, but the
     // index still advances so it stays a stable iterator position.
-    if (dl->QueryInterface(IID_IDeckLinkOutput, reinterpret_cast<void**>(&out)) == S_OK && out) {
-      std::string name, model;
-      CFStringRef cf = nullptr;
-      if (dl->GetDisplayName(&cf) == S_OK && cf) { name = cfToStd(cf); CFRelease(cf); cf = nullptr; }
-      if (dl->GetModelName(&cf) == S_OK && cf)   { model = cfToStd(cf); CFRelease(cf); cf = nullptr; }
+    const char* generation = "none";
+    IDeckLinkOutput* out = queryOutput(dl, &generation);
+    const DeviceCaps caps = queryCaps(dl);
 
+    // Every device the driver reports gets a line, output or not — the one
+    // that is skipped is the one somebody is standing in front of.
+    std::fprintf(stderr, "diag:device %d \"%s\" model=\"%s\" io=%s duplex=%s output=%s\n",
+                 index, name.c_str(), model.c_str(),
+                 !caps.known ? "unreported"
+                   : (caps.capture && caps.playback) ? "capture+playback"
+                   : caps.playback ? "playback"
+                   : caps.capture ? "capture" : "none",
+                 duplexName(caps.duplex).c_str(),
+                 out ? generation : "no");
+
+    if (out) {
+      ++listed;
       std::printf("%s{\"index\":%d,\"name\":\"%s\",\"model\":\"%s\",\"modes\":[",
                   first ? "" : ",", index, jsonEscape(name).c_str(), jsonEscape(model).c_str());
       first = false;
@@ -272,6 +441,12 @@ int listDevices() {
       }
       std::printf("]}");
       out->Release();
+    } else if (caps.known && !caps.playback) {
+      sawCaptureOnly = true;
+    } else if (caps.duplex == bmdDuplexInactive) {
+      sawInactive = true;
+    } else {
+      sawUnexplained = true;
     }
     dl->Release();
     ++index;
@@ -279,8 +454,25 @@ int listDevices() {
   it->Release();
   std::printf("]\n");
   std::fprintf(stderr, "diag:devices-seen %d (output-capable listed above)\n", index);
-  if (index == 0)
+
+  if (index == 0) {
     fail("the API loaded but the driver reports 0 devices — check the device is powered, connected, and not held exclusively by another app");
+  } else if (listed == 0) {
+    // Seen but unusable. Say which kind of unusable — each has a different fix.
+    const std::string sdk = BLACKMAGIC_DECKLINK_API_VERSION_STRING;
+    if (driverTooOldToDrive())
+      fail("Desktop Video " + gInstalledApiString + " is too old for this build — update Blackmagic Desktop Video to " + sdk +
+           " or newer (free, at blackmagicdesign.com/support), then Refresh Devices");
+    else if (sawCaptureOnly && !sawInactive && !sawUnexplained)
+      fail("the connected device is capture-only (no SDI/HDMI output) — playout needs an output-capable device such as an "
+           "UltraStudio Monitor 3G, UltraStudio 4K Mini, or a DeckLink with an output connector");
+    else if (sawInactive)
+      fail("the device's output is inactive in its current profile — in Blackmagic Desktop Video Setup, set the connector "
+           "or profile to output (or full duplex), then Refresh Devices");
+    else
+      fail("a device was found but offers no output interface — see the diag:device line above; if Desktop Video is older than " +
+           sdk + ", updating it is the first thing to try");
+  }
   return 0;
 }
 
@@ -490,15 +682,17 @@ class Player {
 
   /** stdin -> frame. False on EOF. */
   bool fillFrame(IDeckLinkMutableVideoFrame* f, std::vector<uint8_t>& row) {
-    IDeckLinkVideoBuffer* buf = nullptr;
-    if (f->QueryInterface(IID_IDeckLinkVideoBuffer, reinterpret_cast<void**>(&buf)) != S_OK || !buf) {
-      fail("frame has no video buffer interface");
+    // Through whichever generation of buffer interface this driver has — the
+    // 16.0 and 15.3.1 vtables differ, so this is not a plain QueryInterface.
+    FrameBytes buf;
+    if (!buf.open(f)) {
+      fail("frame has no video buffer interface (neither this SDK's nor the previous generation's)");
       return false;
     }
     bool ok = false;
-    if (buf->StartAccess(bmdBufferAccessWrite) == S_OK) {
+    if (buf.StartAccess(bmdBufferAccessWrite) == S_OK) {
       void* bytes = nullptr;
-      if (buf->GetBytes(&bytes) == S_OK && bytes) {
+      if (buf.GetBytes(&bytes) == S_OK && bytes) {
         auto* dst = static_cast<uint8_t*>(bytes);
         if (cardRowBytes_ == ffRowBytes_) {
           ok = readFully(0, dst, static_cast<size_t>(ffRowBytes_) * static_cast<size_t>(height_));
@@ -511,9 +705,8 @@ class Player {
           }
         }
       }
-      buf->EndAccess(bmdBufferAccessWrite);
+      buf.EndAccess(bmdBufferAccessWrite);
     }
-    buf->Release();
     return ok;
   }
 
@@ -653,12 +846,21 @@ int play(int deviceIndex, const std::string& modeId, int controlFd) {
     return 1;
   }
 
-  IDeckLinkOutput* out = nullptr;
-  if (chosen->QueryInterface(IID_IDeckLinkOutput, reinterpret_cast<void**>(&out)) != S_OK || !out) {
-    fail("that device has no video output");
+  readInstalledApiVersion();
+  const char* generation = "none";
+  IDeckLinkOutput* out = queryOutput(chosen, &generation);
+  if (!out) {
+    if (driverTooOldToDrive())
+      fail("Desktop Video " + gInstalledApiString + " is too old for this build — update it to " +
+           BLACKMAGIC_DECKLINK_API_VERSION_STRING + " or newer");
+    else
+      fail("that device has no video output");
     chosen->Release();
     return 1;
   }
+  if (driverOlderThanHelper())
+    std::fprintf(stderr, "diag:driver-generation older-than-helper (Desktop Video %s; output through %s interfaces)\n",
+                 gInstalledApiString.c_str(), generation);
 
   const uint32_t want = stringToFourcc(modeId);
   IDeckLinkDisplayMode* mode = nullptr;
