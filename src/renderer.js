@@ -2745,6 +2745,6 @@
   // ─── Initial State ────────────────────────────────────
   updateVolumeIcon();
   updatePlayButton();
-  console.log('[Renderer] MaidenPlayer v1.3.2 initialized');
+  console.log('[Renderer] MaidenPlayer v1.3.3 initialized');
 
 })();
