@@ -950,6 +950,31 @@ autoUpdater.on('update-available', (info) => {
   });
 });
 
+/**
+ * One sentence a person can act on, instead of electron-updater's message —
+ * which for a 404 is a stack trace with the HTTP headers attached and a note
+ * to "double check that your authentication token is correct", none of which
+ * applies to a public repo.
+ *
+ * The 404 case is the one that actually happened: the release existed but
+ * its manifest had not been uploaded yet. Releases are drafts until complete
+ * now (see the publish job in .github/workflows/build.yml), but a check can
+ * still land in the seconds it takes GitHub to flip one public.
+ */
+function updateErrorDetail(err) {
+  const msg = (err && err.message) || String(err);
+  if (/\b404\b|Cannot find latest/i.test(msg)) {
+    const m = /\/download\/v?(\d+\.\d+\.\d+)\//.exec(msg);
+    return (m ? 'MaidenPlayer ' + m[1] + ' is being published right now' : 'A new version is being published right now')
+      + ' and its update files are not all there yet. Try again in a few minutes.';
+  }
+  if (/ENOTFOUND|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|net::ERR_/i.test(msg)) {
+    return 'GitHub could not be reached. Check the internet connection and try again.';
+  }
+  // Anything else: the first line only. The rest is in the log.
+  return msg.split('\n')[0].slice(0, 200);
+}
+
 function checkForUpdates(isManual) {
   manualUpdateCheck = !!isManual;
 
@@ -964,7 +989,7 @@ function checkForUpdates(isManual) {
         type: 'error',
         title: 'Update Check Failed',
         message: 'Could not check for updates.',
-        detail: err.message,
+        detail: updateErrorDetail(err),
       });
     }
   });

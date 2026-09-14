@@ -48,7 +48,7 @@
         "provider": "github",
         "owner": "Maidendev",
         "repo": "pokit-player",
-        "releaseType": "release"
+        "releaseType": "draft"
       }
     ],
     "directories": {
