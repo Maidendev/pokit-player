@@ -561,7 +561,7 @@ int listDevices() {
           // modes this card can actually drive at 10-bit YUV over SDI. Asking
           // the hardware here is what lets the player stop guessing.
           if (dm->GetFieldDominance() == bmdProgressiveFrame) {
-            BMDDisplayMode actual = 0;
+            BMDDisplayMode actual{};     // BMDDisplayMode is an enum on Windows, an integer on macOS
             BmdBool supported = false;
             const HRESULT hr = out->DoesSupportVideoMode(
                 bmdVideoConnectionSDI, dm->GetDisplayMode(), kPixelFormat,
@@ -1055,8 +1055,8 @@ int play(int deviceIndex, const std::string& modeId, int controlFd) {
   }
 
   BmdBool supported = false;
-  BMDDisplayMode actual = 0;
-  if (out->DoesSupportVideoMode(bmdVideoConnectionSDI, want, kPixelFormat, bmdNoVideoOutputConversion,
+  BMDDisplayMode actual{};     // BMDDisplayMode is an enum on Windows, an integer on macOS
+  if (out->DoesSupportVideoMode(bmdVideoConnectionSDI, static_cast<BMDDisplayMode>(want), kPixelFormat, bmdNoVideoOutputConversion,
                                 bmdSupportedVideoModeDefault, &actual, &supported) != S_OK || !supported) {
     fail("this device cannot output mode '" + modeId + "' as 10-bit YUV over SDI");
     mode->Release(); out->Release(); chosen->Release();
