@@ -76,4 +76,26 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onStreamEnd: (callback) => ipcRenderer.on('stream-end', () => callback()),
   onStreamError: (callback) => ipcRenderer.on('stream-error', (_e, msg) => callback(msg)),
   onStreamReady: (callback) => ipcRenderer.on('stream-ready', (_e, info) => callback(info)),
+
+  // ─── Media editing (QuickTime 7 Pro-style operations) ───────────────────
+  // Menu commands arrive as one named channel; the renderer dispatches.
+  onEditCommand: (callback) => ipcRenderer.on('edit-command', (_e, name, payload) => callback(name, payload)),
+  showSaveDialog: (opts) => ipcRenderer.invoke('show-save-dialog', opts),
+  showOpenDialog: (opts) => ipcRenderer.invoke('show-open-dialog', opts),
+  editRun: (op, payload) => ipcRenderer.invoke('edit-run', op, payload),
+  editCancel: (jobId) => ipcRenderer.invoke('edit-cancel', jobId),
+  editDescribe: (source) => ipcRenderer.invoke('edit-describe', source),
+  editSnap: (source, inTime, outTime) => ipcRenderer.invoke('edit-snap', source, inTime, outTime),
+  editCheckCombine: (entries) => ipcRenderer.invoke('edit-check-combine', entries),
+  editPresets: () => ipcRenderer.invoke('edit-presets'),
+  onEditProgress: (callback) => ipcRenderer.on('edit-progress', (_e, info) => callback(info)),
+  saveTextFile: (filePath, text) => ipcRenderer.invoke('save-text-file', filePath, text),
+  readTextFile: (filePath) => ipcRenderer.invoke('read-text-file', filePath),
+  revealInFolder: (filePath) => ipcRenderer.invoke('reveal-in-folder', filePath),
+
+  // Look & framing: LUT and aspect-ratio masks. State is owned by main.
+  lookGet: () => ipcRenderer.invoke('look-get'),
+  lookUpdate: (partial) => ipcRenderer.invoke('look-update', partial),
+  openLutDialog: () => ipcRenderer.invoke('open-lut-dialog'),
+  onLookState: (callback) => ipcRenderer.on('look-state', (_e, state) => callback(state)),
 });

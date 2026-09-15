@@ -92,6 +92,56 @@ Deep inspection via ffprobe, in a summary view with an expandable **Advanced** s
 - Load a secondary audio file or caption file against the primary picture
 - Frame-accurate offset nudge (± frames, shown in ms) applied live
 
+#### Editing — the QuickTime 7 Pro utility layer
+Small media operations that used to need an NLE. Every one writes a **new** file
+through the bundled ffmpeg; the loaded media is never modified. Progress shows in a
+corner toast while playback continues; **Show in Folder** / **Open** when it lands.
+
+- **In / Out selection** — `I` and `O` set the points, `Shift+I` / `Shift+O` jump to
+  them, `⌘⇧X` clears. The selection is highlighted on the scrubber and an edit bar shows
+  In, Out and duration in source timecode with **Play Sel**, **Trim…**, **Delete…**,
+  **To Bin** and **Export…**
+- **Lossless where possible** — trims, deletes, joins, audio replace/remove and
+  extraction are **stream copies** (`-c copy`): no decode, no re-encode, bit-identical
+  picture, finished at disk speed. Intra-only codecs (ProRes, DNxHD/HR, JPEG 2000,
+  MJPEG) cut frame-accurately. Long-GOP sources (H.264, HEVC, MPEG-2) can only be cut on
+  keyframes, so the dialog **shows where the lossless cut will actually land** (e.g.
+  `In 00:00:04:04 (−1 fr), Out 00:00:09:20 (+3 fr)`) and offers a frame-accurate encode
+  instead. The source timecode is carried into the new file, offset to the cut.
+- **Export…** (`⌘E`) — whole movie or In → Out; Lossless, Apple ProRes 422 HQ / 422 /
+  4444, Avid DNxHR HQ / HQX, or H.264. Optionally **bake in the active LUT**.
+- **Append / Combine Movies** (`⌘⇧B`) — an ordered list of movies and clip-bin
+  selections, reorderable, saved as one file. The panel says whether a **lossless join**
+  is possible and, if not, exactly which property differs (codec, raster, pixel format,
+  frame rate, audio layout); mismatched inputs are conformed to the first movie and
+  encoded. **File ▸ Append Movie…** is the one-step version.
+- **Save Current Frame** (`⌘⇧S`) — PNG, JPEG, TIFF, DPX or OpenEXR from the **source**
+  (never the playback proxy). 10-bit and float sources write 16-bit / 10-bit DPX / float
+  EXR. If the LUT is on, the still matches what is on screen.
+- **Audio** (File ▸ Audio) — Extract as WAV / AIFF (24-bit) or original codec in a MOV;
+  Remove Audio; Replace Audio; Add Audio Track; **Mute Channels** per channel with the
+  file's own speaker labels (only tracks with a muted channel are re-encoded).
+- **Markers** — `M` drops a marker at the exact source timecode; `Shift+↑` / `Shift+↓`
+  walk them, `Alt+M` deletes the one under the playhead. Markers show on the scrubber,
+  can be named in the Markers panel (`⌘⇧M`), persist per file, and export as CSV, text
+  or JSON.
+
+#### Look & Framing (`⌘⇧F` / `Ctrl+Shift+F`)
+For VFX review, dailies and screenings.
+
+- **LUT support** — load a `.cube` (1D or 3D, up to 129³), toggle it with `U` during
+  playback. The desktop preview runs on the GPU (WebGL2, 16-bit float texture,
+  trilinear). Everything that leaves the player — **Blackmagic SDI output**, exports and
+  saved frames — applies the same file through ffmpeg's `lut3d` with tetrahedral
+  interpolation. **Apply LUT to External Video Output** decides whether the projector
+  gets the look.
+- **Aspect-ratio masks** — one-click **1.43 · 1.78 · 1.85 · 2.39 · 2.40 · 9:16 · 4:5**
+  plus a custom ratio, with an **adjustable opacity** from a dim to a full mask.
+- **Guides** — center crosshair, action safe (93%) and title safe (90%) per
+  SMPTE ST 2046-1 / EBU R95, drawn relative to the masked frame.
+
+Mask and LUT settings persist between launches and are mirrored in the View menu.
+
 #### QuickTime Keyboard Shortcuts
 
 | Shortcut | Action |
@@ -104,7 +154,7 @@ Deep inspection via ffprobe, in a summary view with an expandable **Advanced** s
 | `⌘L` (or `Ctrl+L`) | Loop playback on / off |
 | `⌘⇧L` (or `Ctrl+Shift+L`) | Audio meters & loudness |
 | `↑` / `↓` | Volume up / down |
-| `M` | Mute / Unmute |
+| `Shift+M` | Mute / Unmute (bare `M` is now Add Marker) |
 | `F` | Toggle fullscreen |
 | `0`–`9` | Jump to 0%–90% of video |
 | `⌘1` / `Ctrl+1` | Quarter size (25%) |
@@ -112,6 +162,20 @@ Deep inspection via ffprobe, in a summary view with an expandable **Advanced** s
 | `⌘3` / `Ctrl+3` | Full size (100%) |
 | `⌘O` / `Ctrl+O` | Open file |
 | `⌘I` / `Ctrl+I` | Toggle file info panel |
+| `I` / `O` | Set In / Out point |
+| `Shift+I` / `Shift+O` | Go to In / Out |
+| `⌘⇧X` / `Ctrl+Shift+X` | Clear In and Out |
+| `⌘E` / `Ctrl+E` | Export… (whole movie or In → Out) |
+| `⌘B` / `Ctrl+B` | Copy selection to the clip bin |
+| `⌘⇧B` / `Ctrl+Shift+B` | Combine Movies panel |
+| `⌘⇧S` / `Ctrl+Shift+S` | Save current frame as a still |
+| `M` | Add marker at the source timecode |
+| `Alt+M` | Delete marker at playhead |
+| `Shift+↑` / `Shift+↓` | Previous / next marker |
+| `⌘⇧M` / `Ctrl+Shift+M` | Markers panel |
+| `⌘U` / `Ctrl+U` | Load LUT |
+| `U` | Toggle LUT on / off |
+| `⌘⇧F` / `Ctrl+Shift+F` | Look & Framing panel (LUT, masks, guides) |
 
 #### UI Design
 - Dark, professional interface inspired by DaVinci Resolve
@@ -183,7 +247,12 @@ professional_video_player/
     ├── preload.js        # Preload script (IPC bridge)
     ├── index.html        # Application UI
     ├── styles.css        # DaVinci Resolve-inspired styling
-    ├── renderer.js       # Playback engine, UI logic, shortcuts
+    ├── editing.css       # In/Out bar, markers, combine, look & framing panels
+    ├── renderer.js       # Playback engine, UI logic, shortcuts, editing UI
+    ├── editor.js         # ffmpeg media operations: trim, delete, combine, stills, audio
+    ├── lut.js            # .cube parser + WebGL2 LUT preview (renderer)
+    ├── masks.js          # Aspect-ratio masks and framing guides (renderer)
+    ├── sdi.js            # Blackmagic SDI output (optionally through the LUT)
     └── assets/
         ├── icon.png      # App icon (PNG, 512×512)
         └── icon.ico      # App icon (ICO, multi-resolution)

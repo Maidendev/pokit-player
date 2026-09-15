@@ -6,6 +6,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; media-src 'self' file: blob:; img-src 'self' data:; script-src 'self';">
   <title>MaidenPlayer</title>
   <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="editing.css">
 </head>
 <body>
   <div id="app">
@@ -14,11 +15,18 @@
       <div class="title-bar-drag"></div>
       <div class="title-text" id="title-text">MaidenPlayer</div>
       <div class="sdi-badge hidden" id="sdi-badge" title="External video output"></div>
+      <div class="look-badge hidden" id="lut-badge" title="LUT active (U toggles)"></div>
     </div>
 
     <!-- Main Video Area -->
     <div id="video-container">
       <video id="video-player" preload="auto"></video>
+      <!-- LUT preview: the video's frames drawn through a .cube LUT on the GPU.
+           Shown instead of the <video> while a LUT is enabled; the <video>
+           keeps playing underneath as the clock. -->
+      <canvas id="lut-canvas" class="hidden"></canvas>
+      <!-- Aspect-ratio mask and framing guides, drawn over whichever picture is up -->
+      <canvas id="mask-canvas"></canvas>
       <!-- Caption overlay: rendered over picture, outside the video element so
            it survives transcoded and MSE-streamed playback alike -->
       <div id="caption-overlay" class="hidden"><div id="caption-text"></div></div>
@@ -101,6 +109,61 @@
           </div>
         </div>
       </div>
+
+      <!-- Export / Trim dialog: range + format, then a Save As -->
+      <div id="export-dialog" class="hidden">
+        <div class="seq-dialog-box export-box">
+          <h3 id="export-title">Export</h3>
+          <p id="export-subtitle">Save a new file from the current movie. The source is never modified.</p>
+          <div class="form-row">
+            <label for="export-range">Range</label>
+            <select id="export-range">
+              <option value="all">Whole movie</option>
+              <option value="selection">In → Out</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label for="export-format">Format</label>
+            <select id="export-format"></select>
+          </div>
+          <div class="form-row form-row-check" id="export-lut-row">
+            <label><input type="checkbox" id="export-bake-lut"> Bake in the active LUT</label>
+          </div>
+          <div id="export-note" class="dialog-note">—</div>
+          <div class="seq-dialog-buttons">
+            <button id="export-btn-cancel" class="seq-btn seq-btn-secondary">Cancel</button>
+            <button id="export-btn-save" class="seq-btn seq-btn-primary">Save As…</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Mute Channels dialog -->
+      <div id="mute-dialog" class="hidden">
+        <div class="seq-dialog-box export-box">
+          <h3>Mute Channels</h3>
+          <p>Tick the channels to silence. Video is copied; only tracks with a muted channel are re-encoded.</p>
+          <div id="mute-tracks" class="mute-tracks"></div>
+          <div class="seq-dialog-buttons">
+            <button id="mute-btn-cancel" class="seq-btn seq-btn-secondary">Cancel</button>
+            <button id="mute-btn-save" class="seq-btn seq-btn-primary">Save As…</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Background job progress: playback continues while a file is written -->
+      <div id="job-toast" class="hidden">
+        <div class="job-row">
+          <span id="job-label">Saving…</span>
+          <span id="job-pct" class="job-pct">0%</span>
+        </div>
+        <div class="job-track"><div id="job-bar"></div></div>
+        <div class="job-actions">
+          <button id="job-cancel" class="ctrl-btn-text job-btn">Cancel</button>
+          <button id="job-reveal" class="ctrl-btn-text job-btn hidden">Show in Folder</button>
+          <button id="job-open" class="ctrl-btn-text job-btn hidden">Open</button>
+          <button id="job-close" class="ctrl-btn-text job-btn job-btn-quiet hidden">Dismiss</button>
+        </div>
+      </div>
     </div>
 
     <!-- Controls Bar -->
@@ -110,9 +173,31 @@
         <div id="timeline-track">
           <div id="timeline-buffered"></div>
           <div id="timeline-progress"></div>
+          <!-- In → Out selection highlight and its two handles -->
+          <div id="timeline-range" class="hidden"></div>
+          <div id="timeline-in" class="timeline-point hidden" title="In point"></div>
+          <div id="timeline-out" class="timeline-point hidden" title="Out point"></div>
           <div id="timeline-thumb"></div>
         </div>
+        <!-- Marker ticks sit above the track so they never hide the playhead -->
+        <div id="timeline-markers"></div>
         <div id="timeline-tooltip" class="hidden">00:00:00:00</div>
+      </div>
+
+      <!-- Edit bar: appears once an In or Out point exists -->
+      <div id="edit-bar" class="hidden">
+        <span class="edit-label">In</span><span id="edit-in" class="edit-tc">—</span>
+        <span class="edit-label">Out</span><span id="edit-out" class="edit-tc">—</span>
+        <span class="edit-label">Dur</span><span id="edit-dur" class="edit-tc">—</span>
+        <span id="edit-note" class="edit-note"></span>
+        <div class="edit-actions">
+          <button id="btn-play-sel" class="ctrl-btn-text edit-btn" title="Play In to Out">Play Sel</button>
+          <button id="btn-trim-sel" class="ctrl-btn-text edit-btn" title="Save the selection as a new movie">Trim…</button>
+          <button id="btn-delete-sel" class="ctrl-btn-text edit-btn" title="Remove the selection and save the rest">Delete…</button>
+          <button id="btn-copy-sel" class="ctrl-btn-text edit-btn" title="Add the selection to the clip bin for combining (⌘B)">To Bin</button>
+          <button id="btn-export-sel" class="ctrl-btn-text edit-btn" title="Export the selection with a codec choice (⌘E)">Export…</button>
+          <button id="btn-clear-sel" class="ctrl-btn-text edit-btn edit-btn-quiet" title="Clear In and Out (⌘⇧X)">Clear</button>
+        </div>
       </div>
 
       <!-- Sync-check bar: appears once a caption or secondary audio file loads -->
@@ -163,6 +248,13 @@
           <button id="btn-loop" class="ctrl-btn" title="Loop Playback: Off (⌘L)" aria-pressed="false">
             <svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/></svg>
           </button>
+          <span class="ctrl-sep"></span>
+          <!-- In / Out / Marker: the QuickTime 7 Pro editing trio -->
+          <button id="btn-set-in" class="ctrl-btn ctrl-btn-letter" title="Set In Point (I)">I</button>
+          <button id="btn-set-out" class="ctrl-btn ctrl-btn-letter" title="Set Out Point (O)">O</button>
+          <button id="btn-add-marker" class="ctrl-btn" title="Add Marker (M)">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 3h2v18H6V3zm2 1h11l-3 4.5 3 4.5H8V4z"/></svg>
+          </button>
         </div>
 
         <!-- Center: Timecode -->
@@ -174,9 +266,16 @@
           </div>
         </div>
 
-        <!-- Right: Volume, Info, Fullscreen -->
+        <!-- Right: Save frame, Look, Volume, Info, Fullscreen -->
         <div class="controls-right">
-          <button id="btn-mute" class="ctrl-btn" title="Mute/Unmute (M)">
+          <button id="btn-save-frame" class="ctrl-btn" title="Save Current Frame… (⌘⇧S)">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M9 3 7.2 5H4a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-3.2L15 3H9zm3 5.5a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9zm0 2a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z"/></svg>
+          </button>
+          <button id="btn-look" class="ctrl-btn" title="Look &amp; Framing: LUT and aspect-ratio masks (⌘⇧F)">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 5h18v14H3V5zm2 2v10h14V7H5zm2 2.5h10v5H7v-5z"/></svg>
+          </button>
+          <span class="ctrl-sep"></span>
+          <button id="btn-mute" class="ctrl-btn" title="Mute/Unmute (Shift+M)">
             <svg id="icon-vol-high" viewBox="0 0 24 24" fill="currentColor"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 8.77v6.46A4.49 4.49 0 0 0 16.5 12zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg>
             <svg id="icon-vol-low" viewBox="0 0 24 24" fill="currentColor" class="hidden"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 8.77v6.46A4.49 4.49 0 0 0 16.5 12z"/></svg>
             <svg id="icon-vol-mute" viewBox="0 0 24 24" fill="currentColor" class="hidden"><path d="M16.5 12A4.5 4.5 0 0 0 14 8.77v2.06l2.47 2.47c.03-.1.03-.2.03-.3zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51A8.87 8.87 0 0 0 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3 3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06a8.99 8.99 0 0 0 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4 9.91 6.09 12 8.18V4z"/></svg>
@@ -263,6 +362,89 @@
       </div>
     </div>
 
+    <!-- Markers Panel -->
+    <div id="markers-panel" class="hidden">
+      <div class="info-panel-header">
+        <h3>Markers <span id="markers-count" class="panel-count"></span></h3>
+        <button id="btn-close-markers" class="ctrl-btn">&times;</button>
+      </div>
+      <div class="info-panel-body">
+        <div id="markers-list" class="markers-list"></div>
+        <div id="markers-empty" class="panel-empty">Press <kbd>M</kbd> while watching to drop a marker at the source timecode.</div>
+        <div class="panel-actions">
+          <button id="btn-export-markers" class="ctrl-btn-text">Export…</button>
+          <button id="btn-clear-markers" class="ctrl-btn-text edit-btn-quiet">Clear All</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Combine Movies Panel (also the clip bin) -->
+    <div id="combine-panel" class="hidden">
+      <div class="info-panel-header">
+        <h3>Combine Movies</h3>
+        <button id="btn-close-combine" class="ctrl-btn">&times;</button>
+      </div>
+      <div class="info-panel-body">
+        <p class="panel-help">Movies play in this order and are saved as one file. Drop files here, or send an In → Out selection with <kbd>⌘B</kbd>.</p>
+        <div id="combine-list" class="combine-list"></div>
+        <div class="panel-actions">
+          <button id="btn-combine-add-current" class="ctrl-btn-text">Add Current Movie</button>
+          <button id="btn-combine-add-files" class="ctrl-btn-text">Add Files…</button>
+          <button id="btn-combine-clear" class="ctrl-btn-text edit-btn-quiet">Clear</button>
+        </div>
+        <div id="combine-status" class="dialog-note">—</div>
+        <div class="form-row">
+          <label for="combine-format">Format</label>
+          <select id="combine-format"></select>
+        </div>
+        <div class="panel-actions">
+          <button id="btn-combine-save" class="ctrl-btn-text">Save Combined Movie…</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Look & Framing Panel: LUT and aspect-ratio masks -->
+    <div id="look-panel" class="hidden">
+      <div class="info-panel-header">
+        <h3>Look &amp; Framing</h3>
+        <button id="btn-close-look" class="ctrl-btn">&times;</button>
+      </div>
+      <div class="info-panel-body">
+        <div class="info-section">
+          <h4>LUT</h4>
+          <div id="look-lut-name" class="look-lut-name">No LUT loaded</div>
+          <div class="panel-actions">
+            <button id="btn-look-load-lut" class="ctrl-btn-text">Load .cube…</button>
+            <button id="btn-look-clear-lut" class="ctrl-btn-text edit-btn-quiet">Clear</button>
+          </div>
+          <label class="check-row"><input type="checkbox" id="look-lut-enabled"> Enable LUT <kbd>U</kbd></label>
+          <label class="check-row"><input type="checkbox" id="look-lut-sdi"> Apply LUT to external video output (Blackmagic)</label>
+          <div id="look-lut-note" class="dialog-note"></div>
+        </div>
+        <div class="info-section">
+          <h4>Aspect Ratio Mask</h4>
+          <div class="mask-presets" id="mask-presets"></div>
+          <div class="form-row">
+            <label for="mask-custom">Custom</label>
+            <input type="number" id="mask-custom" min="0.2" max="5" step="0.01" value="2.00">
+            <button id="btn-mask-custom" class="ctrl-btn-text">Use</button>
+          </div>
+          <div class="form-row">
+            <label for="mask-opacity">Opacity</label>
+            <input type="range" id="mask-opacity" min="0" max="1" step="0.05" value="0.7">
+            <span id="mask-opacity-value" class="edit-tc">70%</span>
+          </div>
+        </div>
+        <div class="info-section">
+          <h4>Guides</h4>
+          <label class="check-row"><input type="checkbox" id="guide-crosshair"> Center crosshair</label>
+          <label class="check-row"><input type="checkbox" id="guide-action"> Action safe (93%)</label>
+          <label class="check-row"><input type="checkbox" id="guide-title"> Title safe (90%)</label>
+          <div class="dialog-note">Safe areas follow SMPTE ST 2046-1 / EBU R95 and are drawn relative to the masked frame.</div>
+        </div>
+      </div>
+    </div>
+
     <!-- Shortcuts Panel -->
     <div id="shortcuts-panel" class="hidden">
       <div class="info-panel-header">
@@ -277,9 +459,25 @@
         <div class="shortcut-row"><kbd>⌘←</kbd> / <kbd>⌘→</kbd><span>Jump 1s back / forward</span></div>
         <div class="shortcut-row"><kbd>↑</kbd> / <kbd>↓</kbd><span>Volume up / down</span></div>
         <div class="shortcut-row"><kbd>⌘L</kbd><span>Loop playback on / off</span></div>
-        <div class="shortcut-row"><kbd>M</kbd><span>Mute / Unmute</span></div>
+        <div class="shortcut-row"><kbd>Shift+M</kbd><span>Mute / Unmute</span></div>
         <div class="shortcut-row"><kbd>F</kbd><span>Toggle fullscreen</span></div>
         <div class="shortcut-row"><kbd>0</kbd>–<kbd>9</kbd><span>Jump to 0%–90%</span></div>
+        <div class="shortcut-row shortcut-group">Editing</div>
+        <div class="shortcut-row"><kbd>I</kbd> / <kbd>O</kbd><span>Set In / Out point</span></div>
+        <div class="shortcut-row"><kbd>Shift+I</kbd> / <kbd>Shift+O</kbd><span>Go to In / Out</span></div>
+        <div class="shortcut-row"><kbd>⌘⇧X</kbd><span>Clear In and Out</span></div>
+        <div class="shortcut-row"><kbd>⌘E</kbd><span>Export… (whole movie or In → Out)</span></div>
+        <div class="shortcut-row"><kbd>⌘B</kbd><span>Copy selection to the clip bin</span></div>
+        <div class="shortcut-row"><kbd>⌘⇧B</kbd><span>Combine Movies panel</span></div>
+        <div class="shortcut-row"><kbd>⌘⇧S</kbd><span>Save current frame as a still</span></div>
+        <div class="shortcut-row"><kbd>M</kbd><span>Add marker at the source timecode</span></div>
+        <div class="shortcut-row"><kbd>Alt+M</kbd><span>Delete marker at playhead</span></div>
+        <div class="shortcut-row"><kbd>Shift+↑</kbd> / <kbd>Shift+↓</kbd><span>Previous / next marker</span></div>
+        <div class="shortcut-row"><kbd>⌘⇧M</kbd><span>Markers panel</span></div>
+        <div class="shortcut-row shortcut-group">Look &amp; Framing</div>
+        <div class="shortcut-row"><kbd>⌘U</kbd> / <kbd>U</kbd><span>Load LUT / toggle LUT on and off</span></div>
+        <div class="shortcut-row"><kbd>⌘⇧F</kbd><span>Look &amp; Framing panel (LUT, masks, guides)</span></div>
+        <div class="shortcut-row shortcut-group">Files &amp; Analysis</div>
         <div class="shortcut-row"><kbd>⌘O</kbd><span>Open file</span></div>
         <div class="shortcut-row"><kbd>⌘I</kbd><span>File information</span></div>
         <div class="shortcut-row"><kbd>⌘G</kbd><span>GOP / data rate strip</span></div>
@@ -290,6 +488,8 @@
     </div>
   </div>
 
+  <script src="lut.js"></script>
+  <script src="masks.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

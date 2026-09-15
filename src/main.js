@@ -8,10 +8,139 @@ const captions = require('./captions');
 const { StreamDecoder } = require('./stream-decoder');
 const braw = require('./braw');
 const sdi = require('./sdi');
+const editor = require('./editor');
 const { autoUpdater } = require('electron-updater');
 
 let mainWindow = null;
 let streamDecoder = null; // Singleton stream decoder instance
+
+/** Send a named editing command to the renderer (menu → player). */
+function sendEdit(name, payload) {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('edit-command', name, payload);
+}
+
+// ─── Look & framing state (LUT + aspect-ratio masks) ─────────────────────────
+// One source of truth, owned here, because the same settings are reachable
+// from the View menu, from the renderer's Look panel and from keyboard
+// toggles. Any change lands in updateLook(), which rebuilds the menu's
+// check marks and broadcasts the whole state to the renderer. Persisted to
+// userData so a LUT and mask chosen for a review survive a relaunch.
+const MASK_PRESETS = [
+  { key: '1.43', label: '1.43 (IMAX)', ratio: 1.43 },
+  { key: '1.78', label: '1.78 (16:9)', ratio: 16 / 9 },
+  { key: '1.85', label: '1.85 (Flat)', ratio: 1.85 },
+  { key: '2.39', label: '2.39 (Scope)', ratio: 2.39 },
+  { key: '2.40', label: '2.40', ratio: 2.40 },
+  { key: '9:16', label: '9:16 (Vertical)', ratio: 9 / 16 },
+  { key: '4:5', label: '4:5 (Social)', ratio: 4 / 5 },
+];
+
+const LOOK_DEFAULTS = {
+  lutPath: null,
+  lutEnabled: false,
+  lutToSdi: true,
+  maskPreset: null,        // key from MASK_PRESETS, 'custom', or null for off
+  maskCustomRatio: 2.0,
+  maskOpacity: 0.7,        // 1.0 = fully masked
+  crosshair: false,
+  actionSafe: false,
+  titleSafe: false,
+};
+let lookState = Object.assign({}, LOOK_DEFAULTS);
+
+function lookStatePath() {
+  return path.join(app.getPath('userData'), 'look.json');
+}
+
+function loadLookState() {
+  try {
+    const saved = JSON.parse(fs.readFileSync(lookStatePath(), 'utf8'));
+    lookState = Object.assign({}, LOOK_DEFAULTS, saved);
+    // A LUT that has since been deleted must not stay armed.
+    if (lookState.lutPath && !fs.existsSync(lookState.lutPath)) {
+      lookState.lutPath = null;
+      lookState.lutEnabled = false;
+    }
+  } catch (_) { /* first run */ }
+}
+
+function saveLookState() {
+  try { fs.writeFileSync(lookStatePath(), JSON.stringify(lookState, null, 2)); } catch (err) {
+    console.warn('[Look] Could not save look state:', err.message);
+  }
+}
+
+function updateLook(partial) {
+  lookState = Object.assign({}, lookState, partial || {});
+  if (!lookState.lutPath) lookState.lutEnabled = false;
+  saveLookState();
+  buildMenu();
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('look-state', lookState);
+  return lookState;
+}
+
+async function openLutDialog() {
+  if (!mainWindow) return;
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Load LUT',
+    properties: ['openFile'],
+    filters: [{ name: 'LUT Files', extensions: ['cube'] }, { name: 'All Files', extensions: ['*'] }],
+  });
+  if (result.canceled || !result.filePaths.length) return;
+  updateLook({ lutPath: result.filePaths[0], lutEnabled: true });
+}
+
+function lutSubmenu() {
+  const name = lookState.lutPath ? path.basename(lookState.lutPath) : null;
+  const hint = (accel) =>
+    (process.platform === 'darwin' ? { accelerator: accel, registerAccelerator: false } : {});
+  return [
+    { label: 'Load LUT…', accelerator: 'CmdOrCtrl+U', click: () => openLutDialog() },
+    {
+      label: name ? 'Enable LUT — ' + name : 'Enable LUT',
+      type: 'checkbox',
+      checked: !!lookState.lutEnabled,
+      enabled: !!lookState.lutPath,
+      ...hint('U'),
+      click: (item) => updateLook({ lutEnabled: item.checked }),
+    },
+    {
+      label: 'Apply LUT to External Video Output',
+      type: 'checkbox',
+      checked: !!lookState.lutToSdi,
+      click: (item) => updateLook({ lutToSdi: item.checked }),
+    },
+    { type: 'separator' },
+    { label: 'Clear LUT', enabled: !!lookState.lutPath, click: () => updateLook({ lutPath: null, lutEnabled: false }) },
+  ];
+}
+
+function maskSubmenu() {
+  const items = [
+    { label: 'Off', type: 'radio', checked: !lookState.maskPreset, click: () => updateLook({ maskPreset: null }) },
+  ];
+  for (const p of MASK_PRESETS) {
+    items.push({
+      label: p.label,
+      type: 'radio',
+      checked: lookState.maskPreset === p.key,
+      click: () => updateLook({ maskPreset: p.key }),
+    });
+  }
+  items.push({
+    label: 'Custom (' + Number(lookState.maskCustomRatio).toFixed(2) + ')…',
+    type: 'radio',
+    checked: lookState.maskPreset === 'custom',
+    click: () => { updateLook({ maskPreset: 'custom' }); sendEdit('toggle-look-panel', { show: true }); },
+  });
+  items.push({ type: 'separator' });
+  items.push({ label: 'Center Crosshair', type: 'checkbox', checked: !!lookState.crosshair, click: (i) => updateLook({ crosshair: i.checked }) });
+  items.push({ label: 'Action Safe (93%)', type: 'checkbox', checked: !!lookState.actionSafe, click: (i) => updateLook({ actionSafe: i.checked }) });
+  items.push({ label: 'Title Safe (90%)', type: 'checkbox', checked: !!lookState.titleSafe, click: (i) => updateLook({ titleSafe: i.checked }) });
+  items.push({ type: 'separator' });
+  items.push({ label: 'Mask Opacity & Guides…', click: () => sendEdit('toggle-look-panel', { show: true }) });
+  return items;
+}
 
 // ─── External video output (Blackmagic SDI) ───────────────────────────────
 // The equivalent of RV's "Present Mode": pick a DeckLink / UltraStudio in the
@@ -235,6 +364,43 @@ function buildMenu() {
           click: () => openImageSequenceDialog(),
         },
         { type: 'separator' },
+        // ── QuickTime 7 Pro-style utilities. Everything here saves a NEW file
+        //    through src/editor.js; the source is never modified.
+        {
+          label: 'Save Current Frame…',
+          accelerator: 'CmdOrCtrl+Shift+S',
+          click: () => sendEdit('save-frame'),
+        },
+        {
+          label: 'Export…',
+          accelerator: 'CmdOrCtrl+E',
+          click: () => sendEdit('export', { range: 'auto' }),
+        },
+        { type: 'separator' },
+        {
+          label: 'Append Movie…',
+          click: () => sendEdit('append-movie'),
+        },
+        {
+          label: 'Combine Movies…',
+          accelerator: 'CmdOrCtrl+Shift+B',
+          click: () => sendEdit('toggle-combine-panel'),
+        },
+        {
+          label: 'Audio',
+          submenu: [
+            { label: 'Extract Audio as WAV…', click: () => sendEdit('audio-op', { op: 'extract', format: 'wav' }) },
+            { label: 'Extract Audio as AIFF…', click: () => sendEdit('audio-op', { op: 'extract', format: 'aiff' }) },
+            { label: 'Extract Audio, Original Codec (MOV)…', click: () => sendEdit('audio-op', { op: 'extract', format: 'copy' }) },
+            { type: 'separator' },
+            { label: 'Remove Audio…', click: () => sendEdit('audio-op', { op: 'remove' }) },
+            { label: 'Replace Audio…', click: () => sendEdit('audio-op', { op: 'replace' }) },
+            { label: 'Add Audio Track…', click: () => sendEdit('audio-op', { op: 'add' }) },
+            { type: 'separator' },
+            { label: 'Mute Channels…', click: () => sendEdit('audio-op', { op: 'mute' }) },
+          ],
+        },
+        { type: 'separator' },
         {
           label: 'Load Caption / Subtitle File…',
           accelerator: 'CmdOrCtrl+Shift+C',
@@ -265,6 +431,41 @@ function buildMenu() {
         },
         { type: 'separator' },
         { role: 'quit' },
+      ],
+    },
+    {
+      label: 'Edit',
+      submenu: [
+        // Text-editing roles so marker names can be cut, copied and pasted —
+        // on macOS Cmd-C/V in an input only work when these roles exist.
+        { role: 'undo' },
+        { role: 'redo' },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
+        { role: 'selectAll' },
+        { type: 'separator' },
+        // ── In / Out selection (I and O, as in every NLE)
+        { label: 'Set In Point', ...hint('I'), click: () => sendEdit('set-in') },
+        { label: 'Set Out Point', ...hint('O'), click: () => sendEdit('set-out') },
+        { label: 'Go to In Point', ...hint('Shift+I'), click: () => sendEdit('go-in') },
+        { label: 'Go to Out Point', ...hint('Shift+O'), click: () => sendEdit('go-out') },
+        { label: 'Clear In and Out', accelerator: 'CmdOrCtrl+Shift+X', click: () => sendEdit('clear-in-out') },
+        { label: 'Play In to Out', click: () => sendEdit('play-selection') },
+        { type: 'separator' },
+        { label: 'Trim to Selection…', click: () => sendEdit('export', { range: 'selection', title: 'Trim to Selection' }) },
+        { label: 'Delete Selection…', click: () => sendEdit('delete-selection') },
+        { label: 'Copy Selection to Clip Bin', accelerator: 'CmdOrCtrl+B', click: () => sendEdit('copy-selection') },
+        { type: 'separator' },
+        // ── Markers (M, as in Resolve / Premiere; Shift+M is now Mute)
+        { label: 'Add Marker', ...hint('M'), click: () => sendEdit('add-marker') },
+        { label: 'Delete Marker at Playhead', ...hint('Alt+M'), click: () => sendEdit('delete-marker') },
+        { label: 'Next Marker', ...hint('Shift+Down'), click: () => sendEdit('next-marker') },
+        { label: 'Previous Marker', ...hint('Shift+Up'), click: () => sendEdit('prev-marker') },
+        { label: 'Markers Panel', accelerator: 'CmdOrCtrl+Shift+M', click: () => sendEdit('toggle-markers-panel') },
+        { label: 'Export Markers…', click: () => sendEdit('export-markers') },
+        { label: 'Clear All Markers', click: () => sendEdit('clear-markers') },
       ],
     },
     {
@@ -353,8 +554,10 @@ function buildMenu() {
           },
         },
         {
+          // Bare M now drops a marker (the NLE convention the client asked
+          // for); mute moved one modifier over.
           label: 'Mute / Unmute',
-          ...hint('M'),
+          ...hint('Shift+M'),
           click: () => {
             if (mainWindow) mainWindow.webContents.send('toggle-mute');
           },
@@ -412,6 +615,15 @@ function buildMenu() {
             if (mainWindow) mainWindow.webContents.send('toggle-audio-panel');
           },
         },
+        { type: 'separator' },
+        // ── Look & framing: LUT preview and aspect-ratio masks for VFX review
+        {
+          label: 'Look & Framing Panel',
+          accelerator: 'CmdOrCtrl+Shift+F',
+          click: () => sendEdit('toggle-look-panel'),
+        },
+        { label: 'LUT', submenu: lutSubmenu() },
+        { label: 'Aspect Ratio Mask', submenu: maskSubmenu() },
         { type: 'separator' },
         { role: 'togglefullscreen' },
         { role: 'toggleDevTools' },
@@ -849,8 +1061,13 @@ ipcMain.handle('sdi-start', async (_event, opts) => {
     source: opts.source,
     isImageSequence: !!opts.isImageSequence,
     startFrame: opts.startFrame,
+    firstFrame: opts.firstFrame,
     startTime: opts.startTime,
     loop: !!opts.loop,
+    // The projector gets the LUT only when the user has asked for it on the
+    // external output too — a grading LUT on the desktop is not always meant
+    // for the room.
+    lut: (lookState.lutEnabled && lookState.lutToSdi && lookState.lutPath) ? lookState.lutPath : null,
   });
   if (!ok) return { error: sdi.MISSING_HELPER_MESSAGE };
   console.log('[SDI] Started:', device.name, mode.name, opts.source);
@@ -858,6 +1075,79 @@ ipcMain.handle('sdi-start', async (_event, opts) => {
 });
 
 ipcMain.handle('sdi-stop', async () => { if (sdiOutput) { sdiOutput.stop(); sdiOutput = null; } return { ok: true }; });
+
+// ─── Media editing IPC (src/editor.js) ───────────────────────────────────────
+
+ipcMain.handle('show-save-dialog', async (_event, opts) => {
+  if (!mainWindow) return null;
+  const result = await dialog.showSaveDialog(mainWindow, Object.assign({
+    title: 'Save As',
+    properties: ['createDirectory', 'showOverwriteConfirmation'],
+  }, opts || {}));
+  return result.canceled ? null : result.filePath;
+});
+
+ipcMain.handle('show-open-dialog', async (_event, opts) => {
+  if (!mainWindow) return [];
+  const result = await dialog.showOpenDialog(mainWindow, Object.assign({
+    properties: ['openFile'],
+  }, opts || {}));
+  return result.canceled ? [] : result.filePaths;
+});
+
+/**
+ * Run one editing operation. Progress goes back as 'edit-progress'
+ * { jobId, pct }. Resolves to the operation's result, or { error } /
+ * { cancelled } — never rejects, so the renderer has one code path.
+ */
+ipcMain.handle('edit-run', async (event, op, payload) => {
+  console.log('[Main] IPC: edit-run', op, payload && payload.output);
+  try {
+    const result = await editor.run(op, payload, (pct) => {
+      if (!event.sender.isDestroyed()) event.sender.send('edit-progress', { jobId: payload && payload.jobId, pct });
+    });
+    return result;
+  } catch (err) {
+    if (err && err.cancelled) return { cancelled: true };
+    console.error('[Main] Edit error:', err.message);
+    return { error: err.message };
+  }
+});
+
+ipcMain.handle('edit-cancel', async (_event, jobId) => editor.cancelJob(jobId));
+
+ipcMain.handle('edit-describe', async (_event, source) => {
+  try { return await editor.describeSource(source); } catch (err) { return { error: err.message }; }
+});
+
+ipcMain.handle('edit-snap', async (_event, source, inTime, outTime) => {
+  try { return await editor.snapToKeyframes(source, inTime, outTime); } catch (err) { return { error: err.message }; }
+});
+
+ipcMain.handle('edit-check-combine', async (_event, entries) => {
+  try { return await editor.checkCombine(entries); } catch (err) { return { error: err.message }; }
+});
+
+ipcMain.handle('edit-presets', async () => ({
+  encode: Object.entries(editor.ENCODE_PRESETS).map(([key, p]) => ({ key, label: p.label, ext: p.ext })),
+  stills: Object.entries(editor.STILL_FORMATS).map(([key, f]) => ({ key, label: f.label, ext: f.ext })),
+}));
+
+ipcMain.handle('save-text-file', async (_event, filePath, text) => {
+  try { fs.writeFileSync(filePath, text, 'utf8'); return { ok: true }; } catch (err) { return { error: err.message }; }
+});
+
+ipcMain.handle('read-text-file', async (_event, filePath) => {
+  try { return { text: fs.readFileSync(filePath, 'utf8') }; } catch (err) { return { error: err.message }; }
+});
+
+ipcMain.handle('reveal-in-folder', async (_event, filePath) => { shell.showItemInFolder(filePath); return true; });
+
+// ─── Look & framing IPC ──────────────────────────────────────────────────────
+
+ipcMain.handle('look-get', async () => lookState);
+ipcMain.handle('look-update', async (_event, partial) => updateLook(partial));
+ipcMain.handle('open-lut-dialog', async () => { await openLutDialog(); return lookState; });
 ipcMain.handle('sdi-pause', async () => { if (sdiOutput) sdiOutput.pause(); return { ok: true }; });
 ipcMain.handle('sdi-resume', async () => { if (sdiOutput) sdiOutput.resume(); return { ok: true }; });
 
@@ -1010,6 +1300,7 @@ if (process.platform === 'win32') {
 }
 
 app.whenReady().then(() => {
+  loadLookState();   // before the menu is built, so its check marks are right
   createWindow();
   if (app.isPackaged) checkForUpdates(false);
 });

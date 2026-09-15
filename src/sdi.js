@@ -36,6 +36,7 @@ const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
 const { FFMPEG } = require('./transcoder');
+const { lutFilter } = require('./editor');
 
 const MISSING_HELPER_MESSAGE =
   'SDI output is not installed in this build.\n\n' +
@@ -259,6 +260,7 @@ function matchModeForSource(source, supported) {
  *                                      so a loop can return to it. Defaults to startFrame.
  * @param {number} [opts.startTime]     Everything else — seek position in seconds.
  * @param {boolean} [opts.loop]
+ * @param {string}  [opts.lut]          Path to a .cube LUT to apply to the output picture.
  * @returns {string[]}
  */
 function buildDecodeArgs(opts) {
@@ -268,9 +270,14 @@ function buildDecodeArgs(opts) {
 
   // Fit to the mode without cropping or stretching: scale to fit, then pad to
   // the exact raster. force_original_aspect_ratio keeps the framing intact.
+  // An optional .cube LUT (ffmpeg lut3d, tetrahedral) goes in after the fit
+  // and before the final format conversion, so a review projector shows the
+  // same look as the desktop. See editor.lutFilter for the path escaping.
+  const lut = opts.lut ? lutFilter(opts.lut) + ',' : '';
   const fit =
     'scale=' + mode.width + ':' + mode.height + ':force_original_aspect_ratio=decrease,' +
     'pad=' + mode.width + ':' + mode.height + ':(ow-iw)/2:(oh-ih)/2,' +
+    lut +
     'format=yuv422p10le';
 
   // The input, from the current position.

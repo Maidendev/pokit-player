@@ -1,0 +1,416 @@
+/* ============================================
+   Editing, markers, combine, look & framing
+   Companion to styles.css — everything added for
+   the QuickTime 7 Pro-style utilities lives here.
+   ============================================ */
+
+/* In → Out highlight on the scrubber, drawn under the progress fill */
+#timeline-range {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  background: rgba(230, 18, 197, 0.22);
+  border-top: 1px solid rgba(230, 18, 197, 0.6);
+  border-bottom: 1px solid rgba(230, 18, 197, 0.6);
+  pointer-events: none;
+}
+
+.timeline-point {
+  position: absolute;
+  top: 50%;
+  width: 3px;
+  height: 14px;
+  background: var(--accent);
+  transform: translate(-50%, -50%);
+  border-radius: 1px;
+  box-shadow: 0 0 3px rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+}
+#timeline-in::after,
+#timeline-out::after {
+  content: '';
+  position: absolute;
+  top: -1px;
+  width: 6px;
+  height: 6px;
+  background: var(--accent);
+}
+#timeline-in::after { left: 3px; clip-path: polygon(0 0, 100% 50%, 0 100%); }
+#timeline-out::after { right: 3px; clip-path: polygon(100% 0, 0 50%, 100% 100%); }
+
+/* Marker ticks: thin flags above the track, hit-testable for hover/click */
+#timeline-markers {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  top: 0;
+  height: 8px;
+  pointer-events: none;
+}
+.timeline-marker {
+  position: absolute;
+  top: 0;
+  width: 2px;
+  height: 8px;
+  background: #4cd3ff;
+  transform: translateX(-50%);
+  pointer-events: auto;
+  cursor: pointer;
+}
+.timeline-marker::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 1px;
+  width: 6px;
+  height: 4px;
+  background: #4cd3ff;
+  clip-path: polygon(0 0, 100% 50%, 0 100%);
+}
+.timeline-marker:hover { background: #fff; }
+.timeline-marker:hover::before { background: #fff; }
+
+#edit-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 16px;
+  font-size: 11px;
+  color: var(--text-muted);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+.edit-label { text-transform: uppercase; letter-spacing: 0.6px; font-size: 10px; }
+.edit-tc {
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+.edit-note {
+  margin-left: 6px;
+  color: var(--text-muted);
+  font-size: 10.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.edit-actions { margin-left: auto; display: flex; gap: 6px; flex-shrink: 0; }
+.edit-btn { padding: 4px 9px; }
+.edit-btn-quiet,
+.ctrl-btn-text.edit-btn-quiet {
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+}
+.ctrl-btn-text.edit-btn-quiet:hover { color: var(--text-primary); }
+
+.ctrl-sep {
+  width: 1px;
+  height: 20px;
+  background: rgba(255, 255, 255, 0.1);
+  margin: 0 4px;
+}
+.ctrl-btn-letter {
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 13px;
+  font-weight: 700;
+  width: 28px;
+}
+.ctrl-btn-letter.set { color: var(--accent); }
+
+/* Shared dialog/panel form pieces */
+.form-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.form-row > label:first-child { min-width: 56px; }
+.form-row select,
+.form-row input[type="number"] {
+  flex: 1;
+  padding: 6px 10px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: inherit;
+  outline: none;
+}
+.form-row select:focus,
+.form-row input:focus { border-color: var(--accent); }
+.form-row input[type="range"] { flex: 1; }
+.form-row-check label { display: flex; align-items: center; gap: 6px; color: var(--text-secondary); cursor: pointer; }
+.dialog-note {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.45;
+  margin-bottom: 14px;
+  min-height: 14px;
+}
+.dialog-note.ok { color: var(--success); }
+.dialog-note.warn { color: #f1c40f; }
+.dialog-note.error { color: var(--danger); }
+.export-box { width: 440px; }
+.export-box p { margin-bottom: 14px; }
+#export-dialog, #mute-dialog {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.7);
+  z-index: 60;
+  backdrop-filter: blur(6px);
+}
+
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding: 4px 0;
+  cursor: pointer;
+}
+.check-row kbd {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  padding: 0 5px;
+  font-size: 10px;
+  color: var(--text-primary);
+}
+
+/* Mute Channels dialog */
+.mute-tracks { margin-bottom: 14px; max-height: 260px; overflow-y: auto; }
+.mute-track { margin-bottom: 10px; }
+.mute-track-title {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  margin-bottom: 4px;
+  display: flex;
+  justify-content: space-between;
+}
+.mute-track-title button {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 11px;
+  cursor: pointer;
+}
+.mute-channels { display: flex; flex-wrap: wrap; gap: 6px; }
+.mute-channels label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  padding: 3px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+}
+.mute-channels label.on { border-color: var(--danger); color: var(--danger); }
+
+/* Job toast: bottom-right, above the transport, never blocks the picture */
+#job-toast {
+  position: absolute;
+  right: 16px;
+  bottom: 96px;
+  width: 300px;
+  padding: 10px 12px;
+  background: rgba(24, 24, 24, 0.95);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  z-index: 70;
+  font-size: 12px;
+  backdrop-filter: blur(8px);
+}
+#job-toast.done { border-color: rgba(46, 204, 113, 0.5); }
+#job-toast.failed { border-color: rgba(231, 76, 60, 0.6); }
+.job-row { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+#job-label { color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#job-toast.failed #job-label { white-space: normal; }
+.job-pct { font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; color: var(--text-secondary); }
+.job-track { height: 3px; background: rgba(255, 255, 255, 0.1); border-radius: 2px; overflow: hidden; }
+#job-bar { height: 100%; width: 0; background: var(--accent); transition: width 0.15s linear; }
+#job-toast.done #job-bar { background: var(--success); }
+.job-actions { display: flex; gap: 6px; justify-content: flex-end; margin-top: 8px; }
+.job-btn { padding: 4px 10px; }
+.job-btn-quiet { background: transparent; color: var(--text-secondary); border: 1px solid rgba(255, 255, 255, 0.15); }
+
+/* Markers / Combine / Look panels share the info-panel chrome */
+#markers-panel,
+#combine-panel,
+#look-panel {
+  position: absolute;
+  top: 50px;
+  right: 16px;
+  width: 360px;
+  max-height: calc(100% - 120px);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  z-index: 30;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  animation: slideIn var(--transition-normal) ease;
+}
+#combine-panel.drop-target { border-color: var(--accent); }
+
+.panel-count { font-size: 11px; color: var(--text-muted); font-weight: 400; margin-left: 4px; }
+.panel-help { font-size: 11px; color: var(--text-muted); margin-bottom: 10px; line-height: 1.45; }
+.panel-help kbd, .panel-empty kbd {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  padding: 0 5px;
+  font-size: 10px;
+  color: var(--text-primary);
+}
+.panel-empty { font-size: 12px; color: var(--text-muted); padding: 10px 0 14px; }
+.panel-actions { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0 12px; }
+
+.markers-list { max-height: 40vh; overflow-y: auto; }
+.marker-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+.marker-row.active .marker-tc { color: var(--accent); }
+.marker-tc {
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 12px;
+  color: #4cd3ff;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px 4px;
+  text-align: left;
+}
+.marker-tc:hover { color: #fff; }
+.marker-name {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  color: var(--text-primary);
+  font-size: 12px;
+  padding: 3px 6px;
+  font-family: inherit;
+  min-width: 0;
+}
+.marker-name:hover { border-color: var(--border-color); }
+.marker-name:focus { border-color: var(--accent); outline: none; background: rgba(0, 0, 0, 0.3); }
+.marker-del, .combine-btn {
+  width: 22px;
+  height: 22px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 3px;
+  font-size: 13px;
+  line-height: 1;
+}
+.marker-del:hover, .combine-btn:hover { color: var(--text-primary); background: rgba(255, 255, 255, 0.08); }
+.combine-btn:disabled { opacity: 0.3; cursor: default; }
+
+.combine-list { max-height: 34vh; overflow-y: auto; margin-bottom: 4px; }
+.combine-row {
+  display: grid;
+  grid-template-columns: 18px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+.combine-index { font-size: 11px; color: var(--text-muted); font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; }
+.combine-name { font-size: 12px; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.combine-meta { font-size: 10.5px; color: var(--text-muted); font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; }
+.combine-ctrls { display: flex; gap: 2px; }
+
+/* Look panel */
+.look-lut-name {
+  font-size: 12px;
+  color: var(--text-primary);
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  word-break: break-all;
+  margin-bottom: 6px;
+}
+.mask-presets { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.mask-preset {
+  padding: 5px 10px;
+  border-radius: 3px;
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+}
+.mask-preset:hover { color: var(--text-primary); border-color: rgba(255, 255, 255, 0.3); }
+.mask-preset.active { background: var(--accent); color: #000; border-color: var(--accent); font-weight: 600; }
+#mask-custom { max-width: 90px; flex: 0 1 auto; }
+
+/* LUT canvas replaces the <video> on screen while a LUT is on; the mask canvas
+   floats above both and never takes the mouse. */
+#lut-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+  z-index: 2;
+}
+#mask-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 3;
+  display: none;
+}
+/* The <video> keeps decoding under the LUT canvas; opacity leaves its clicks
+   and requestVideoFrameCallback working where display:none would not. */
+#video-player.lut-active { opacity: 0; }
+
+.look-badge {
+  margin-left: 10px;
+  padding: 1px 8px;
+  border-radius: var(--radius);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  color: #4cd3ff;
+  background: rgba(76, 211, 255, 0.14);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.shortcut-row.shortcut-group {
+  justify-content: flex-start;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--accent);
+  padding-top: 12px;
+  border-bottom: none;
+}
+
+@media (max-width: 900px) {
+  .edit-note { display: none; }
+  #markers-panel, #combine-panel, #look-panel { width: 300px; }
+}

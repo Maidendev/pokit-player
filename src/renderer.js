@@ -134,7 +134,11 @@
   function secondsToTimecode(seconds, fps) {
     if (isNaN(seconds) || seconds < 0) seconds = 0;
     const roundedFps = Math.round(fps);
-    const totalFrames = Math.floor(seconds * fps);
+    // A frame boundary computed as n / fps comes back as (n - 1e-14) once
+    // multiplied out again, and floor() then reports the frame BEFORE it —
+    // so the same In point could read 04:04 in one place and 04:05 in
+    // another. The epsilon is far below a frame and removes the ambiguity.
+    const totalFrames = Math.floor(seconds * fps + 1e-6);
     const ff = totalFrames % roundedFps;
     const totalSeconds = Math.floor(seconds);
     const ss = totalSeconds % 60;
@@ -1211,6 +1215,7 @@
     if (hasVideoLoaded && !video.paused) {
       updateTimecode();
       updateTimeline();
+      checkSelectionPlayback();
     }
     requestAnimationFrame(animationLoop);
   }
@@ -1351,6 +1356,10 @@
     const isHidden = panel.classList.contains('hidden');
     fileInfoPanel.classList.add('hidden');
     shortcutsPanel.classList.add('hidden');
+    // The editing panels share the same corner; one at a time.
+    document.getElementById('markers-panel').classList.add('hidden');
+    document.getElementById('combine-panel').classList.add('hidden');
+    document.getElementById('look-panel').classList.add('hidden');
     if (isHidden) panel.classList.remove('hidden');
   }
 
@@ -1400,6 +1409,8 @@
     activeCueIndex = -1;          // a seek can land anywhere in the cue list
     updateCaptionOverlay();
     resyncSecondaryAudio(true);
+    drawLutFrame();               // paused + seeked: rVFC will not fire, draw by hand
+    renderMarkersPanelActive();
   });
   video.addEventListener('loadedmetadata', () => {
     // New media with a device selected: route it. Dimensions are known now.
@@ -1408,7 +1419,11 @@
     updateTimecode();
     startTimecodeUpdater();
     updateFileInfoFromVideo();
+    masks.redraw();
+    updateSelectionUI();
+    renderTimelineMarkers();
   });
+  video.addEventListener('loadeddata', () => drawLutFrame());
   video.addEventListener('volumechange', updateVolumeIcon);
   video.addEventListener('canplay', () => {
     console.log('[Renderer] Video can play');
@@ -1581,8 +1596,21 @@
         e.preventDefault();
         if (e.ctrlKey || e.metaKey) seekRelative(JUMP_SECONDS); else frameStep(1);
         break;
-      case 'ArrowUp': e.preventDefault(); changeVolume(0.05); break;
-      case 'ArrowDown': e.preventDefault(); changeVolume(-0.05); break;
+      // Shift+arrows walk the markers (Resolve's binding); bare arrows are volume.
+      case 'ArrowUp': e.preventDefault(); if (e.shiftKey) prevMarker(); else changeVolume(0.05); break;
+      case 'ArrowDown': e.preventDefault(); if (e.shiftKey) nextMarker(); else changeVolume(-0.05); break;
+      // I / O set the selection; Shift+I / Shift+O jump to it. Cmd/Ctrl+I and
+      // Cmd/Ctrl+O are registered menu accelerators and never reach here.
+      case 'KeyI':
+        if (!mod && !e.repeat) { e.preventDefault(); if (e.shiftKey) goToIn(); else setInPoint(); }
+        break;
+      case 'KeyO':
+        if (!mod && !e.repeat) { e.preventDefault(); if (e.shiftKey) goToOut(); else setOutPoint(); }
+        break;
+      // U toggles the LUT (Cmd/Ctrl+U loads one, via the menu).
+      case 'KeyU':
+        if (!mod && !e.repeat) { e.preventDefault(); toggleLut(); }
+        break;
       // J/K/L ignore auto-repeat: holding L must not run up the speed ladder.
       case 'KeyJ':
         if (!mod && !e.repeat) { e.preventDefault(); if (kHeld) slowShuttle(-1); else shuttleBackward(); }
@@ -1600,12 +1628,19 @@
         if (!mod && !e.repeat) { e.preventDefault(); if (kHeld) slowShuttle(1); else shuttleForward(); }
         break;
       case 'KeyF': if (!mod) { e.preventDefault(); toggleFullscreen(); } break;
-      case 'KeyM': if (!mod) { e.preventDefault(); toggleMute(); } break;
+      // M drops a marker at the source timecode — the NLE convention the
+      // client asked for. Mute moved to Shift+M; Alt+M deletes the marker
+      // under the playhead.
+      case 'KeyM':
+        if (e.altKey && !e.ctrlKey && !e.metaKey) { e.preventDefault(); if (!e.repeat) deleteMarkerAtPlayhead(); }
+        else if (!mod) { e.preventDefault(); if (e.shiftKey) toggleMute(); else if (!e.repeat) addMarker(); }
+        break;
       case 'Escape':
         fileInfoPanel.classList.add('hidden');
         shortcutsPanel.classList.add('hidden');
         audioPanel.classList.add('hidden');
         hideSequenceDialog();
+        closeEditingUi();
         break;
     }
   });
@@ -1684,6 +1719,7 @@
 
   async function loadFileInfo(filePath) {
     console.log('[Renderer] Loading file info for:', filePath);
+    onMediaChanged(filePath);     // new file: fresh In/Out, this file's markers
     const stats = await window.electronAPI.getFileStats(filePath);
     if (!stats) {
       console.warn('[Renderer] Could not get file stats');
@@ -2735,6 +2771,1252 @@
   });
 
   window.addEventListener('resize', () => { if (gopVisible) drawGopStrip(); });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  //  QuickTime 7 Pro-style editing
+  //
+  //  In/Out selection → Trim / Delete / Copy-to-bin / Export, markers on M,
+  //  Append & Combine Movies, Save Current Frame, audio extract / remove /
+  //  replace / add / mute. Every operation writes a NEW file through
+  //  src/editor.js in the main process; the loaded media is never changed.
+  //  Lossless (stream copy) is the default wherever the source allows it.
+  // ═══════════════════════════════════════════════════════════════════════
+
+  const btnSetIn = document.getElementById('btn-set-in');
+  const btnSetOut = document.getElementById('btn-set-out');
+  const btnAddMarker = document.getElementById('btn-add-marker');
+  const btnSaveFrame = document.getElementById('btn-save-frame');
+  const btnLook = document.getElementById('btn-look');
+  const timelineRange = document.getElementById('timeline-range');
+  const timelineIn = document.getElementById('timeline-in');
+  const timelineOut = document.getElementById('timeline-out');
+  const timelineMarkers = document.getElementById('timeline-markers');
+  const editBar = document.getElementById('edit-bar');
+  const editInEl = document.getElementById('edit-in');
+  const editOutEl = document.getElementById('edit-out');
+  const editDurEl = document.getElementById('edit-dur');
+  const editNoteEl = document.getElementById('edit-note');
+
+  let inPoint = null;              // media seconds, or null
+  let outPoint = null;
+  let playingSelection = false;    // Play In→Out is running; stop (or loop) at Out
+  let editPresets = null;          // { encode: [...], stills: [...] } from main
+  let editDesc = null;             // editor.describeSource() of the current media
+  let editDescFor = null;          // which path editDesc describes
+
+  function mediaDuration() {
+    return (currentProbeInfo && currentProbeInfo.duration) || video.duration || 0;
+  }
+
+  /** Source timecode of a media time, as shown everywhere else in the UI. */
+  function tcOf(t) {
+    return secondsToTimecode(t + sourceTimecodeOffset, frameRate);
+  }
+
+  /** Timecode made safe for a filename: 01:00:04:12 → 01.00.04.12 */
+  function tcForName(t) {
+    return tcOf(t).replace(/[:;]/g, '.');
+  }
+
+  function snapToFrame(t) {
+    return Math.round(t * frameRate) / frameRate;
+  }
+
+  function baseName(p) {
+    return (p || '').split(/[\\/]/).pop().replace(/\.[^.]+$/, '');
+  }
+
+  function dirName(p) {
+    const parts = (p || '').split(/[\\/]/);
+    parts.pop();
+    return parts.join(p && p.includes('\\') ? '\\' : '/');
+  }
+
+  function joinPath(dir, name) {
+    if (!dir) return name;
+    return dir + (dir.includes('\\') ? '\\' : '/') + name;
+  }
+
+  /**
+   * The current media as an editor source. Image sequences are passed as
+   * their pattern (edits then decode the ORIGINAL frames, never the H.264
+   * proxy); .braw has no ffmpeg demuxer and is refused with a clear message.
+   */
+  function currentEditSource() {
+    if (!hasVideoLoaded) { alert('Open a movie first.'); return null; }
+    if (currentProbeInfo && currentProbeInfo.isBraw) {
+      alert('Editing operations are not available for Blackmagic RAW yet — the bundled ffmpeg cannot read .braw directly.');
+      return null;
+    }
+    if (currentSeqInfo) {
+      return {
+        isImageSequence: true,
+        pattern: currentSeqInfo.pattern,
+        startFrame: currentSeqInfo.startFrame,
+        count: currentSeqInfo.count,
+        fps: frameRate,
+        path: currentSeqInfo.sampleFile,
+      };
+    }
+    if (!originalFilePath) { alert('Open a movie first.'); return null; }
+    return { path: originalFilePath, fps: frameRate };
+  }
+
+  /** Where new files default to: next to the source, named after it. */
+  function defaultOutput(suffix, ext) {
+    const src = currentSeqInfo ? currentSeqInfo.sampleFile : (originalFilePath || currentFilePath || '');
+    const base = currentSeqInfo ? currentSeqInfo.prefix.replace(/[._-]+$/, '') || 'sequence' : baseName(src);
+    return joinPath(dirName(src), base + suffix + ext);
+  }
+
+  async function ensureEditPresets() {
+    if (!editPresets) editPresets = await window.electronAPI.editPresets();
+    return editPresets;
+  }
+
+  /** describeSource() for the current media, cached per file. */
+  async function ensureEditDesc() {
+    const source = currentEditSource();
+    if (!source) return null;
+    const key = source.isImageSequence ? source.pattern : source.path;
+    if (editDesc && editDescFor === key) return editDesc;
+    const d = await window.electronAPI.editDescribe(source);
+    if (d && d.error) { console.warn('[Edit] describe failed:', d.error); return null; }
+    editDesc = d;
+    editDescFor = key;
+    return d;
+  }
+
+  function onMediaChanged(filePath) {
+    inPoint = null;
+    outPoint = null;
+    playingSelection = false;
+    editDesc = null;
+    editDescFor = null;
+    updateSelectionUI();
+    loadMarkers(filePath);
+    // A new picture means a new frame to draw through the LUT and new
+    // geometry for the mask; both redraw once metadata lands.
+  }
+
+  // ─── In / Out selection ────────────────────────────────────────────────
+
+  function setInPoint() {
+    if (!hasVideoLoaded) return;
+    inPoint = snapToFrame(video.currentTime);
+    if (outPoint !== null && outPoint <= inPoint) outPoint = null;
+    updateSelectionUI();
+  }
+
+  function setOutPoint() {
+    if (!hasVideoLoaded) return;
+    outPoint = snapToFrame(video.currentTime);
+    if (inPoint !== null && inPoint >= outPoint) inPoint = null;
+    updateSelectionUI();
+  }
+
+  function clearInOut() {
+    inPoint = null;
+    outPoint = null;
+    playingSelection = false;
+    updateSelectionUI();
+  }
+
+  function goToIn() { if (inPoint !== null) { stopShuttle(); seekTo(inPoint); } }
+  function goToOut() { if (outPoint !== null) { stopShuttle(); seekTo(outPoint); } }
+
+  /** The effective range: a missing In is the start, a missing Out the end. */
+  function selectionRange() {
+    const dur = mediaDuration();
+    const a = inPoint !== null ? inPoint : 0;
+    const b = outPoint !== null ? outPoint : dur;
+    return { inTime: a, outTime: b, partial: inPoint === null || outPoint === null, length: Math.max(0, b - a) };
+  }
+
+  function hasSelection() { return inPoint !== null || outPoint !== null; }
+
+  function updateSelectionUI() {
+    const dur = mediaDuration();
+    const show = hasSelection() && dur > 0;
+    editBar.classList.toggle('hidden', !show);
+    btnSetIn.classList.toggle('set', inPoint !== null);
+    btnSetOut.classList.toggle('set', outPoint !== null);
+    timelineIn.classList.toggle('hidden', inPoint === null || !dur);
+    timelineOut.classList.toggle('hidden', outPoint === null || !dur);
+    timelineRange.classList.toggle('hidden', !show);
+    if (!show) return;
+
+    const r = selectionRange();
+    const pctIn = (r.inTime / dur) * 100;
+    const pctOut = (r.outTime / dur) * 100;
+    timelineIn.style.left = pctIn + '%';
+    timelineOut.style.left = pctOut + '%';
+    timelineRange.style.left = pctIn + '%';
+    timelineRange.style.width = Math.max(0, pctOut - pctIn) + '%';
+
+    editInEl.textContent = inPoint !== null ? tcOf(inPoint) : 'start';
+    editOutEl.textContent = outPoint !== null ? tcOf(outPoint) : 'end';
+    editDurEl.textContent = secondsToTimecode(r.length, frameRate) + ' (' + Math.round(r.length * frameRate) + ' fr)';
+    describeLosslessness();
+  }
+
+  /** One line under the selection saying what a lossless cut will do here. */
+  async function describeLosslessness() {
+    editNoteEl.textContent = '';
+    const d = await ensureEditDesc();
+    if (!d || !hasSelection()) return;
+    if (!d.losslessPossible) { editNoteEl.textContent = 'Image sequence — cuts are rendered to a movie'; return; }
+    if (d.intraOnly) { editNoteEl.textContent = (d.video && d.video.codecFriendly ? d.video.codecFriendly : 'Intra-only') + ' — lossless cuts are frame accurate'; return; }
+    editNoteEl.textContent = (d.video && d.video.codecFriendly ? d.video.codecFriendly : 'Long-GOP') + ' — lossless cuts snap to keyframes; choose an encode for frame accuracy';
+  }
+
+  function playSelection() {
+    if (!hasVideoLoaded || !hasSelection()) return;
+    const r = selectionRange();
+    stopShuttle();
+    seekTo(r.inTime);
+    playingSelection = true;
+    shuttleDirection = 1; shuttleSpeed = 1; video.playbackRate = 1;
+    video.play().catch(() => {});
+  }
+
+  /** Called every animation frame while playing: stop or loop at Out. */
+  function checkSelectionPlayback() {
+    if (!playingSelection || outPoint === null) return;
+    if (video.currentTime >= outPoint - frameDuration / 2) {
+      if (loopEnabled) {
+        seekTo(inPoint !== null ? inPoint : 0);
+      } else {
+        video.pause();
+        seekTo(outPoint);
+        playingSelection = false;
+      }
+    }
+  }
+  video.addEventListener('pause', () => { if (!video.seeking) playingSelection = false; });
+
+  btnSetIn.addEventListener('click', setInPoint);
+  btnSetOut.addEventListener('click', setOutPoint);
+  document.getElementById('btn-play-sel').addEventListener('click', playSelection);
+  document.getElementById('btn-trim-sel').addEventListener('click', () => openExportDialog({ range: 'selection', title: 'Trim to Selection' }));
+  document.getElementById('btn-delete-sel').addEventListener('click', () => deleteSelection());
+  document.getElementById('btn-copy-sel').addEventListener('click', () => copySelectionToBin());
+  document.getElementById('btn-export-sel').addEventListener('click', () => openExportDialog({ range: 'selection' }));
+  document.getElementById('btn-clear-sel').addEventListener('click', clearInOut);
+
+  // ─── Markers ───────────────────────────────────────────────────────────
+  //
+  // A marker is a media time plus a name. They live per file (keyed by path)
+  // in localStorage so they are still there when the file is reopened, and
+  // can be exported as CSV / text / JSON for whoever needs the notes.
+
+  const markersPanel = document.getElementById('markers-panel');
+  const markersList = document.getElementById('markers-list');
+  const markersEmpty = document.getElementById('markers-empty');
+  const markersCount = document.getElementById('markers-count');
+
+  let markers = [];        // [{ id, time, name }]
+  let markersPath = null;
+
+  function markersKey(p) { return 'maiden.markers:' + p; }
+
+  function loadMarkers(filePath) {
+    markersPath = filePath || null;
+    markers = [];
+    if (markersPath) {
+      try {
+        const raw = localStorage.getItem(markersKey(markersPath));
+        if (raw) markers = JSON.parse(raw).filter((m) => typeof m.time === 'number');
+      } catch (_) { markers = []; }
+    }
+    renderMarkers();
+  }
+
+  function saveMarkers() {
+    if (!markersPath) return;
+    try {
+      if (markers.length) localStorage.setItem(markersKey(markersPath), JSON.stringify(markers));
+      else localStorage.removeItem(markersKey(markersPath));
+    } catch (err) { console.warn('[Markers] Could not persist:', err.message); }
+  }
+
+  function addMarker() {
+    if (!hasVideoLoaded) return;
+    const t = snapToFrame(video.currentTime);
+    // One marker per frame: pressing M twice on the same frame is a no-op.
+    if (markers.some((m) => Math.abs(m.time - t) < frameDuration / 2)) { flashMarkerButton(); return; }
+    markers.push({ id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), time: t, name: '' });
+    markers.sort((a, b) => a.time - b.time);
+    saveMarkers();
+    renderMarkers();
+    flashMarkerButton();
+  }
+
+  function flashMarkerButton() {
+    btnAddMarker.classList.add('active');
+    setTimeout(() => btnAddMarker.classList.remove('active'), 220);
+  }
+
+  function deleteMarker(id) {
+    markers = markers.filter((m) => m.id !== id);
+    saveMarkers();
+    renderMarkers();
+  }
+
+  function deleteMarkerAtPlayhead() {
+    const t = video.currentTime;
+    const hit = markers.find((m) => Math.abs(m.time - t) < frameDuration * 0.75);
+    if (hit) deleteMarker(hit.id);
+  }
+
+  function clearMarkers() {
+    if (!markers.length) return;
+    if (!confirm('Remove all ' + markers.length + ' markers for this movie?')) return;
+    markers = [];
+    saveMarkers();
+    renderMarkers();
+  }
+
+  function nextMarker() {
+    const t = video.currentTime + frameDuration / 2;
+    const m = markers.find((k) => k.time > t);
+    if (m) { stopShuttle(); seekTo(m.time); }
+  }
+
+  function prevMarker() {
+    const t = video.currentTime - frameDuration / 2;
+    const before = markers.filter((k) => k.time < t);
+    if (before.length) { stopShuttle(); seekTo(before[before.length - 1].time); }
+  }
+
+  function renderMarkers() {
+    renderTimelineMarkers();
+    renderMarkersPanel();
+  }
+
+  function renderTimelineMarkers() {
+    timelineMarkers.innerHTML = '';
+    const dur = mediaDuration();
+    if (!dur) return;
+    for (const m of markers) {
+      const tick = document.createElement('div');
+      tick.className = 'timeline-marker';
+      tick.style.left = (m.time / dur) * 100 + '%';
+      tick.title = tcOf(m.time) + (m.name ? ' — ' + m.name : '');
+      tick.addEventListener('click', (e) => { e.stopPropagation(); stopShuttle(); seekTo(m.time); });
+      tick.addEventListener('mousedown', (e) => e.stopPropagation());   // not a scrub
+      timelineMarkers.appendChild(tick);
+    }
+  }
+
+  function renderMarkersPanel() {
+    markersList.innerHTML = '';
+    markersCount.textContent = markers.length ? '(' + markers.length + ')' : '';
+    markersEmpty.classList.toggle('hidden', markers.length > 0);
+    markers.forEach((m) => {
+      const row = document.createElement('div');
+      row.className = 'marker-row';
+      row.dataset.id = m.id;
+
+      const tc = document.createElement('button');
+      tc.className = 'marker-tc';
+      tc.textContent = tcOf(m.time);
+      tc.title = 'Go to marker';
+      tc.addEventListener('click', () => { stopShuttle(); seekTo(m.time); });
+
+      const name = document.createElement('input');
+      name.className = 'marker-name';
+      name.type = 'text';
+      name.placeholder = 'Note…';
+      name.value = m.name || '';
+      name.addEventListener('change', () => { m.name = name.value.trim(); saveMarkers(); renderTimelineMarkers(); });
+      name.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === 'Escape') name.blur(); e.stopPropagation(); });
+
+      const del = document.createElement('button');
+      del.className = 'marker-del';
+      del.textContent = '×';
+      del.title = 'Delete marker';
+      del.addEventListener('click', () => deleteMarker(m.id));
+
+      row.appendChild(tc); row.appendChild(name); row.appendChild(del);
+      markersList.appendChild(row);
+    });
+    renderMarkersPanelActive();
+  }
+
+  /** Highlight the marker under the playhead in the panel. */
+  function renderMarkersPanelActive() {
+    if (markersPanel.classList.contains('hidden')) return;
+    const t = video.currentTime;
+    for (const row of markersList.children) {
+      const m = markers.find((k) => k.id === row.dataset.id);
+      row.classList.toggle('active', !!m && Math.abs(m.time - t) < frameDuration * 0.75);
+    }
+  }
+
+  async function exportMarkers() {
+    if (!markers.length) { alert('There are no markers to export.'); return; }
+    const out = await window.electronAPI.showSaveDialog({
+      title: 'Export Markers',
+      defaultPath: defaultOutput('_markers', '.csv'),
+      filters: [
+        { name: 'CSV', extensions: ['csv'] },
+        { name: 'Text', extensions: ['txt'] },
+        { name: 'JSON', extensions: ['json'] },
+      ],
+    });
+    if (!out) return;
+    const ext = out.split('.').pop().toLowerCase();
+    let text;
+    if (ext === 'json') {
+      text = JSON.stringify({
+        file: markersPath, frameRate, sourceTimecodeStart: sourceTimecodeStr || null,
+        markers: markers.map((m, i) => ({ index: i + 1, timecode: tcOf(m.time), frame: Math.round(m.time * frameRate), seconds: +m.time.toFixed(4), name: m.name || '' })),
+      }, null, 2);
+    } else if (ext === 'txt') {
+      text = markers.map((m, i) => String(i + 1).padStart(3, ' ') + '  ' + tcOf(m.time) + '  ' + (m.name || '')).join('\n') + '\n';
+    } else {
+      const q = (s) => '"' + String(s).replace(/"/g, '""') + '"';
+      text = 'Marker,Timecode,Frame,Seconds,Name\n' +
+        markers.map((m, i) => [i + 1, tcOf(m.time), Math.round(m.time * frameRate), m.time.toFixed(4), q(m.name || '')].join(',')).join('\n') + '\n';
+    }
+    const r = await window.electronAPI.saveTextFile(out, text);
+    if (r && r.error) alert('Could not write the markers file:\n\n' + r.error);
+    else showJobDone('Exported ' + markers.length + ' markers', out, false);
+  }
+
+  btnAddMarker.addEventListener('click', addMarker);
+  document.getElementById('btn-close-markers').addEventListener('click', () => markersPanel.classList.add('hidden'));
+  document.getElementById('btn-export-markers').addEventListener('click', exportMarkers);
+  document.getElementById('btn-clear-markers').addEventListener('click', clearMarkers);
+  video.addEventListener('timeupdate', renderMarkersPanelActive);
+
+  // ─── Background jobs (one at a time) ───────────────────────────────────
+
+  const jobToast = document.getElementById('job-toast');
+  const jobLabel = document.getElementById('job-label');
+  const jobPct = document.getElementById('job-pct');
+  const jobBar = document.getElementById('job-bar');
+  const jobCancelBtn = document.getElementById('job-cancel');
+  const jobRevealBtn = document.getElementById('job-reveal');
+  const jobOpenBtn = document.getElementById('job-open');
+  const jobCloseBtn = document.getElementById('job-close');
+
+  let activeJob = null;     // { id, output }
+  let jobHideTimer = null;
+
+  function showJobRunning(label) {
+    clearTimeout(jobHideTimer);
+    jobToast.classList.remove('hidden', 'done', 'failed');
+    jobLabel.textContent = label;
+    jobPct.textContent = '0%';
+    jobBar.style.width = '0%';
+    jobCancelBtn.classList.remove('hidden');
+    jobRevealBtn.classList.add('hidden');
+    jobOpenBtn.classList.add('hidden');
+    jobCloseBtn.classList.add('hidden');
+  }
+
+  function showJobDone(label, output, openable) {
+    clearTimeout(jobHideTimer);
+    jobToast.classList.remove('hidden', 'failed');
+    jobToast.classList.add('done');
+    jobLabel.textContent = label;
+    jobLabel.title = output || '';
+    jobPct.textContent = '';
+    jobBar.style.width = '100%';
+    jobCancelBtn.classList.add('hidden');
+    jobRevealBtn.classList.toggle('hidden', !output);
+    jobRevealBtn.onclick = () => window.electronAPI.revealInFolder(output);
+    jobOpenBtn.classList.toggle('hidden', !(output && openable));
+    jobOpenBtn.onclick = () => { jobToast.classList.add('hidden'); openFile(output); };
+    jobCloseBtn.classList.remove('hidden');
+    jobHideTimer = setTimeout(() => jobToast.classList.add('hidden'), 15000);
+  }
+
+  function showJobFailed(message) {
+    clearTimeout(jobHideTimer);
+    jobToast.classList.remove('hidden', 'done');
+    jobToast.classList.add('failed');
+    jobLabel.textContent = message;
+    jobPct.textContent = '';
+    jobBar.style.width = '0%';
+    jobCancelBtn.classList.add('hidden');
+    jobRevealBtn.classList.add('hidden');
+    jobOpenBtn.classList.add('hidden');
+    jobCloseBtn.classList.remove('hidden');
+  }
+
+  jobCloseBtn.addEventListener('click', () => jobToast.classList.add('hidden'));
+  jobCancelBtn.addEventListener('click', () => { if (activeJob) window.electronAPI.editCancel(activeJob.id); });
+  window.electronAPI.onEditProgress((info) => {
+    if (!activeJob || !info || info.jobId !== activeJob.id) return;
+    const pct = Math.round((info.pct || 0) * 100);
+    jobPct.textContent = pct + '%';
+    jobBar.style.width = pct + '%';
+  });
+
+  /**
+   * Run one editor operation with progress in the toast. Resolves to the
+   * result, or null when it failed or was cancelled (already reported).
+   */
+  async function runEditJob(op, payload, label, opts) {
+    opts = opts || {};
+    if (activeJob) { alert('Another operation is still running. Wait for it to finish or cancel it first.'); return null; }
+    const id = 'job' + Date.now().toString(36);
+    activeJob = { id, output: payload.output };
+    showJobRunning(label);
+    let result;
+    try {
+      result = await window.electronAPI.editRun(op, Object.assign({}, payload, { jobId: id }));
+    } catch (err) {
+      result = { error: err.message };
+    }
+    activeJob = null;
+    if (!result || result.cancelled) { jobToast.classList.add('hidden'); return null; }
+    if (result.error) {
+      console.error('[Edit] ' + op + ' failed:', result.error);
+      showJobFailed(result.error.split('\n')[0]);
+      alert(label + ' failed.\n\n' + result.error);
+      return null;
+    }
+    const name = (payload.output || '').split(/[\\/]/).pop();
+    let done = 'Saved ' + name;
+    // trim / deleteRange report where a lossless cut actually landed. (combine
+    // returns an array of snaps instead; its entries are listed in the panel.)
+    const snap = result.snapped;
+    if (snap && !Array.isArray(snap) && !snap.exact && !snap.unknown && typeof result.inTime === 'number') {
+      done += ' (snapped to keyframes: ' + tcOf(result.inTime) + ' → ' + tcOf(result.outTime) + ')';
+    }
+    showJobDone(done, payload.output, opts.openable !== false);
+    return result;
+  }
+
+  // ─── Save Current Frame ────────────────────────────────────────────────
+
+  async function saveCurrentFrame() {
+    const source = currentEditSource();
+    if (!source) return;
+    const presets = await ensureEditPresets();
+    const t = video.currentTime;
+    const filters = presets.stills.map((s) => ({ name: s.label, extensions: [s.ext.slice(1)].concat(s.key === 'jpg' ? ['jpeg'] : s.key === 'tiff' ? ['tiff'] : []) }));
+    const out = await window.electronAPI.showSaveDialog({
+      title: 'Save Current Frame',
+      defaultPath: defaultOutput('_' + tcForName(t), '.png'),
+      filters,
+    });
+    if (!out) return;
+    const ext = out.split('.').pop().toLowerCase();
+    const format = ({ png: 'png', jpg: 'jpg', jpeg: 'jpg', tif: 'tiff', tiff: 'tiff', dpx: 'dpx', exr: 'exr' })[ext] || 'png';
+    // The saved frame matches what is on screen: if the LUT is on, it is baked in.
+    await runEditJob('saveFrame', { source, time: t, output: out, format, lut: lutActive() ? lookState.lutPath : null },
+      'Saving frame ' + tcOf(t) + '…', { openable: false });
+  }
+  btnSaveFrame.addEventListener('click', saveCurrentFrame);
+
+  // ─── Export / Trim / Delete dialog ─────────────────────────────────────
+
+  const exportDialog = document.getElementById('export-dialog');
+  const exportTitle = document.getElementById('export-title');
+  const exportSubtitle = document.getElementById('export-subtitle');
+  const exportRangeSel = document.getElementById('export-range');
+  const exportFormatSel = document.getElementById('export-format');
+  const exportLutRow = document.getElementById('export-lut-row');
+  const exportBakeLut = document.getElementById('export-bake-lut');
+  const exportNote = document.getElementById('export-note');
+  let exportMode = 'export';      // 'export' | 'delete'
+
+  function populateFormatSelect(sel, desc, allowCopy) {
+    sel.innerHTML = '';
+    if (allowCopy) {
+      const o = document.createElement('option');
+      o.value = 'copy';
+      o.textContent = 'Lossless — no re-encode' + (desc && !desc.intraOnly ? ' (cuts snap to keyframes)' : ' (frame accurate)');
+      sel.appendChild(o);
+    }
+    for (const p of (editPresets ? editPresets.encode : [])) {
+      const o = document.createElement('option');
+      o.value = p.key;
+      o.textContent = p.label;
+      sel.appendChild(o);
+    }
+  }
+
+  async function openExportDialog(opts) {
+    opts = opts || {};
+    const source = currentEditSource();
+    if (!source) return;
+    await ensureEditPresets();
+    const desc = await ensureEditDesc();
+    exportMode = opts.mode || 'export';
+
+    const forceSelection = opts.range === 'selection' || exportMode === 'delete';
+    if (forceSelection && !hasSelection()) { alert('Set an In and/or Out point first (I and O).'); return; }
+
+    exportTitle.textContent = opts.title || (exportMode === 'delete' ? 'Delete Selection' : 'Export');
+    exportSubtitle.textContent = exportMode === 'delete'
+      ? 'Removes In → Out and saves everything else as a new movie.'
+      : 'Save a new file from the current movie. The source is never modified.';
+    exportRangeSel.value = (opts.range === 'selection' || (opts.range === 'auto' && hasSelection())) ? 'selection' : 'all';
+    exportRangeSel.disabled = forceSelection;
+    exportRangeSel.querySelector('option[value="selection"]').disabled = !hasSelection();
+
+    populateFormatSelect(exportFormatSel, desc, !!(desc && desc.losslessPossible));
+    exportFormatSel.value = desc && desc.losslessPossible ? 'copy' : 'prores_422hq';
+    exportBakeLut.checked = false;
+    updateExportNote();
+    exportDialog.classList.remove('hidden');
+  }
+
+  async function updateExportNote() {
+    const desc = editDesc;
+    const fmt = exportFormatSel.value;
+    exportLutRow.classList.toggle('hidden', !(lookState.lutPath && fmt !== 'copy'));
+    exportNote.className = 'dialog-note';
+    if (!desc) { exportNote.textContent = ''; return; }
+
+    if (fmt !== 'copy') {
+      exportNote.textContent = 'Re-encodes the picture (frame accurate). Audio is carried over as 24-bit PCM, or AAC in MP4.';
+      return;
+    }
+    if (desc.intraOnly) {
+      exportNote.textContent = 'Stream copy — no quality loss, finishes at disk speed, frame accurate on ' + (desc.video.codecFriendly || 'this codec') + '.';
+      exportNote.classList.add('ok');
+      return;
+    }
+    const useSel = exportRangeSel.value === 'selection' || exportMode === 'delete';
+    if (!useSel) {
+      exportNote.textContent = 'Stream copy of the whole movie — a remux, no quality loss.';
+      exportNote.classList.add('ok');
+      return;
+    }
+    const r = selectionRange();
+    exportNote.textContent = 'Checking keyframes…';
+    const snap = await window.electronAPI.editSnap(currentEditSource(), inPoint !== null ? r.inTime : undefined, outPoint !== null ? r.outTime : undefined);
+    if (!snap || snap.error || snap.unknown) {
+      exportNote.textContent = 'Long-GOP source: a lossless cut lands on the nearest keyframes. Choose an encode for a frame-accurate cut.';
+      exportNote.classList.add('warn');
+      return;
+    }
+    if (snap.exact) {
+      exportNote.textContent = 'Both points fall on keyframes — this lossless cut is frame accurate.';
+      exportNote.classList.add('ok');
+    } else {
+      const parts = [];
+      if (inPoint !== null) parts.push('In ' + tcOf(snap.inTime) + ' (' + (snap.inDeltaFrames > 0 ? '+' : '') + snap.inDeltaFrames + ' fr)');
+      if (outPoint !== null) parts.push('Out ' + tcOf(snap.outTime) + ' (' + (snap.outDeltaFrames > 0 ? '+' : '') + snap.outDeltaFrames + ' fr)');
+      exportNote.textContent = 'Lossless cut will snap to keyframes: ' + parts.join(', ') + '. Choose an encode for a frame-accurate cut.';
+      exportNote.classList.add('warn');
+    }
+  }
+  exportFormatSel.addEventListener('change', updateExportNote);
+  exportRangeSel.addEventListener('change', updateExportNote);
+  document.getElementById('export-btn-cancel').addEventListener('click', () => exportDialog.classList.add('hidden'));
+
+  document.getElementById('export-btn-save').addEventListener('click', async () => {
+    const source = currentEditSource();
+    if (!source) return;
+    const fmt = exportFormatSel.value;
+    const useSel = exportRangeSel.value === 'selection' || exportMode === 'delete';
+    const r = selectionRange();
+    const preset = fmt === 'copy' ? null : editPresets.encode.find((p) => p.key === fmt);
+
+    // Default container: the source's own for a stream copy (MXF → MOV, the
+    // safer target), the preset's for an encode.
+    const srcExt = (editDesc && editDesc.ext) || '.mov';
+    let ext = preset ? preset.ext : (['.mov', '.mp4', '.m4v', '.mkv'].includes(srcExt) ? srcExt : '.mov');
+    const containerFilters = [
+      { name: 'QuickTime Movie', extensions: ['mov'] },
+      { name: 'MP4', extensions: ['mp4'] },
+      { name: 'MXF', extensions: ['mxf'] },
+      { name: 'Matroska', extensions: ['mkv'] },
+    ];
+    containerFilters.sort((a, b) => ('.' + a.extensions[0] === ext ? -1 : 0) - ('.' + b.extensions[0] === ext ? -1 : 0));
+
+    let suffix;
+    if (exportMode === 'delete') suffix = '_cut';
+    else if (useSel) suffix = '_' + tcForName(r.inTime) + '-' + tcForName(r.outTime);
+    else suffix = preset ? '_' + fmt : '_copy';
+
+    const out = await window.electronAPI.showSaveDialog({
+      title: exportTitle.textContent,
+      defaultPath: defaultOutput(suffix, ext),
+      filters: containerFilters,
+    });
+    if (!out) return;
+    exportDialog.classList.add('hidden');
+
+    const payload = {
+      source,
+      output: out,
+      mode: fmt === 'copy' ? 'copy' : 'encode',
+      preset: preset ? preset.key : undefined,
+      lut: (exportBakeLut.checked && fmt !== 'copy' && lookState.lutPath) ? lookState.lutPath : null,
+    };
+    if (exportMode === 'delete') {
+      payload.inTime = r.inTime; payload.outTime = r.outTime;
+      await runEditJob('deleteRange', payload, 'Deleting ' + tcOf(r.inTime) + ' → ' + tcOf(r.outTime) + '…');
+    } else {
+      if (useSel) { payload.inTime = r.inTime; payload.outTime = outPoint !== null ? r.outTime : undefined; }
+      await runEditJob('trim', payload, (useSel ? 'Trimming' : 'Exporting') + ' to ' + out.split(/[\\/]/).pop() + '…');
+    }
+  });
+
+  function deleteSelection() {
+    if (!hasSelection()) { alert('Set an In and/or Out point first (I and O).'); return; }
+    openExportDialog({ mode: 'delete', range: 'selection' });
+  }
+
+  // ─── Clip bin / Combine Movies ─────────────────────────────────────────
+
+  const combinePanel = document.getElementById('combine-panel');
+  const combineList = document.getElementById('combine-list');
+  const combineStatus = document.getElementById('combine-status');
+  const combineFormatSel = document.getElementById('combine-format');
+  let combineEntries = [];       // [{ source, inTime?, outTime?, label, rangeLabel }]
+  let combineCheck = null;
+  let combineCheckTimer = null;
+
+  function entryLabel(source) {
+    return source.isImageSequence ? source.pattern.split(/[\\/]/).pop() : source.path.split(/[\\/]/).pop();
+  }
+
+  function addCombineEntry(entry) {
+    combineEntries.push(entry);
+    renderCombine();
+    scheduleCombineCheck();
+  }
+
+  function copySelectionToBin() {
+    const source = currentEditSource();
+    if (!source) return;
+    const r = selectionRange();
+    const entry = { source, label: entryLabel(source) };
+    if (hasSelection()) {
+      entry.inTime = r.inTime;
+      entry.outTime = outPoint !== null ? r.outTime : undefined;
+      entry.rangeLabel = tcOf(r.inTime) + ' → ' + tcOf(r.outTime);
+    } else {
+      entry.rangeLabel = 'whole movie';
+    }
+    addCombineEntry(entry);
+    togglePanel(combinePanel);
+    if (combinePanel.classList.contains('hidden')) combinePanel.classList.remove('hidden');
+  }
+
+  function addCurrentToCombine() {
+    const source = currentEditSource();
+    if (!source) return;
+    addCombineEntry({ source, label: entryLabel(source), rangeLabel: 'whole movie' });
+  }
+
+  async function addFilesToCombine(paths) {
+    if (!paths) {
+      paths = await window.electronAPI.showOpenDialog({
+        title: 'Add Movies to Combine',
+        properties: ['openFile', 'multiSelections'],
+        filters: [{ name: 'Movies', extensions: ['mov', 'mp4', 'm4v', 'mxf', 'mkv', 'avi', 'mts', 'm2ts', 'ts', 'webm'] }, { name: 'All Files', extensions: ['*'] }],
+      });
+    }
+    for (const p of paths || []) addCombineEntry({ source: { path: p }, label: p.split(/[\\/]/).pop(), rangeLabel: 'whole movie' });
+  }
+
+  function renderCombine() {
+    combineList.innerHTML = '';
+    combineEntries.forEach((e, i) => {
+      const row = document.createElement('div');
+      row.className = 'combine-row';
+      const idx = document.createElement('span');
+      idx.className = 'combine-index';
+      idx.textContent = String(i + 1);
+      const name = document.createElement('div');
+      const title = document.createElement('div');
+      title.className = 'combine-name';
+      title.textContent = e.label;
+      title.title = e.source.path || e.source.pattern;
+      const meta = document.createElement('div');
+      meta.className = 'combine-meta';
+      meta.textContent = e.rangeLabel || '';
+      name.appendChild(title); name.appendChild(meta);
+      const ctrls = document.createElement('div');
+      ctrls.className = 'combine-ctrls';
+      const up = document.createElement('button'); up.className = 'combine-btn'; up.textContent = '↑'; up.title = 'Move up'; up.disabled = i === 0;
+      const down = document.createElement('button'); down.className = 'combine-btn'; down.textContent = '↓'; down.title = 'Move down'; down.disabled = i === combineEntries.length - 1;
+      const del = document.createElement('button'); del.className = 'combine-btn'; del.textContent = '×'; del.title = 'Remove';
+      up.addEventListener('click', () => { [combineEntries[i - 1], combineEntries[i]] = [combineEntries[i], combineEntries[i - 1]]; renderCombine(); scheduleCombineCheck(); });
+      down.addEventListener('click', () => { [combineEntries[i + 1], combineEntries[i]] = [combineEntries[i], combineEntries[i + 1]]; renderCombine(); scheduleCombineCheck(); });
+      del.addEventListener('click', () => { combineEntries.splice(i, 1); renderCombine(); scheduleCombineCheck(); });
+      ctrls.appendChild(up); ctrls.appendChild(down); ctrls.appendChild(del);
+      row.appendChild(idx); row.appendChild(name); row.appendChild(ctrls);
+      combineList.appendChild(row);
+    });
+    document.getElementById('btn-combine-save').disabled = combineEntries.length < 1;
+    if (!combineEntries.length) { combineStatus.textContent = 'Add two or more movies, or send selections here with ⌘B.'; combineStatus.className = 'dialog-note'; }
+  }
+
+  function scheduleCombineCheck() {
+    clearTimeout(combineCheckTimer);
+    combineCheck = null;
+    if (combineEntries.length < 1) return;
+    combineStatus.textContent = 'Checking compatibility…';
+    combineStatus.className = 'dialog-note';
+    combineCheckTimer = setTimeout(runCombineCheck, 250);
+  }
+
+  async function runCombineCheck() {
+    await ensureEditPresets();
+    const entries = combineEntries.map((e) => ({ source: e.source, inTime: e.inTime, outTime: e.outTime }));
+    const check = await window.electronAPI.editCheckCombine(entries);
+    if (!check || check.error) {
+      combineStatus.textContent = 'Could not read one of the movies: ' + (check && check.error);
+      combineStatus.className = 'dialog-note error';
+      return;
+    }
+    combineCheck = check;
+    populateFormatSelect(combineFormatSel, { intraOnly: check.intraOnly }, check.lossless);
+    combineFormatSel.value = check.lossless ? 'copy' : 'prores_422hq';
+    if (check.lossless) {
+      combineStatus.textContent = 'All movies match — they can be joined losslessly, no re-encode.' +
+        (check.notes && check.notes.length ? ' ' + check.notes.join('; ') + '.' : '');
+      combineStatus.className = 'dialog-note ok';
+    } else {
+      combineStatus.textContent = 'A lossless join is not possible: ' + check.reasons.slice(0, 4).join('; ') +
+        (check.reasons.length > 4 ? '; …' : '') + '. Everything will be conformed to the first movie and re-encoded.';
+      combineStatus.className = 'dialog-note warn';
+    }
+  }
+
+  async function saveCombined() {
+    if (!combineEntries.length) return;
+    await ensureEditPresets();
+    const fmt = combineFormatSel.value || 'prores_422hq';
+    const preset = fmt === 'copy' ? null : editPresets.encode.find((p) => p.key === fmt);
+    const first = combineEntries[0].source;
+    const firstPath = first.path || first.pattern;
+    const srcExt = '.' + (firstPath.split('.').pop() || 'mov').toLowerCase();
+    const ext = preset ? preset.ext : (['.mov', '.mp4', '.m4v', '.mkv'].includes(srcExt) ? srcExt : '.mov');
+    const out = await window.electronAPI.showSaveDialog({
+      title: 'Save Combined Movie',
+      defaultPath: joinPath(dirName(firstPath), baseName(firstPath) + '_combined' + ext),
+      filters: [{ name: 'QuickTime Movie', extensions: ['mov'] }, { name: 'MP4', extensions: ['mp4'] }, { name: 'MXF', extensions: ['mxf'] }, { name: 'Matroska', extensions: ['mkv'] }]
+        .sort((a, b) => ('.' + a.extensions[0] === ext ? -1 : 0) - ('.' + b.extensions[0] === ext ? -1 : 0)),
+    });
+    if (!out) return;
+    const entries = combineEntries.map((e) => ({ source: e.source, inTime: e.inTime, outTime: e.outTime }));
+    const result = await runEditJob('combine', {
+      entries, output: out, mode: fmt === 'copy' ? 'copy' : 'encode', preset: preset ? preset.key : undefined,
+    }, 'Combining ' + entries.length + ' movie' + (entries.length === 1 ? '' : 's') + '…');
+    if (result) console.log('[Edit] Combined as', result.mode);
+  }
+
+  /** Append Movie: pick a file, join it after the current movie, save. */
+  async function appendMovie() {
+    const source = currentEditSource();
+    if (!source) return;
+    const picked = await window.electronAPI.showOpenDialog({
+      title: 'Append Movie — choose the movie to add after the current one',
+      properties: ['openFile', 'multiSelections'],
+      filters: [{ name: 'Movies', extensions: ['mov', 'mp4', 'm4v', 'mxf', 'mkv', 'avi', 'mts', 'm2ts', 'ts', 'webm'] }, { name: 'All Files', extensions: ['*'] }],
+    });
+    if (!picked || !picked.length) return;
+    combineEntries = [{ source, label: entryLabel(source), rangeLabel: 'whole movie' }]
+      .concat(picked.map((p) => ({ source: { path: p }, label: p.split(/[\\/]/).pop(), rangeLabel: 'whole movie' })));
+    renderCombine();
+    togglePanel(combinePanel);
+    if (combinePanel.classList.contains('hidden')) combinePanel.classList.remove('hidden');
+    await runCombineCheck();
+  }
+
+  document.getElementById('btn-close-combine').addEventListener('click', () => combinePanel.classList.add('hidden'));
+  document.getElementById('btn-combine-add-current').addEventListener('click', addCurrentToCombine);
+  document.getElementById('btn-combine-add-files').addEventListener('click', () => addFilesToCombine());
+  document.getElementById('btn-combine-clear').addEventListener('click', () => { combineEntries = []; renderCombine(); scheduleCombineCheck(); });
+  document.getElementById('btn-combine-save').addEventListener('click', saveCombined);
+  // Files dropped on the panel join the list instead of replacing the movie.
+  combinePanel.addEventListener('dragover', (e) => { e.preventDefault(); e.stopPropagation(); combinePanel.classList.add('drop-target'); });
+  combinePanel.addEventListener('dragleave', () => combinePanel.classList.remove('drop-target'));
+  combinePanel.addEventListener('drop', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    combinePanel.classList.remove('drop-target');
+    dragCounter = 0;
+    dragOverlay.classList.remove('visible');
+    addFilesToCombine(Array.from(e.dataTransfer.files).map((f) => f.path).filter(Boolean));
+  });
+  renderCombine();
+
+  // ─── Audio operations ──────────────────────────────────────────────────
+
+  const muteDialog = document.getElementById('mute-dialog');
+  const muteTracks = document.getElementById('mute-tracks');
+
+  async function audioOp(payload) {
+    const source = currentEditSource();
+    if (!source) return;
+    if (source.isImageSequence) { alert('An image sequence has no audio to work with.'); return; }
+    const desc = await ensureEditDesc();
+    const op = payload.op;
+
+    if (op === 'extract') {
+      if (!desc || !desc.audio.length) { alert('This movie has no audio.'); return; }
+      const fmt = payload.format;
+      const ext = fmt === 'wav' ? '.wav' : fmt === 'aiff' ? '.aif' : '.mov';
+      const out = await window.electronAPI.showSaveDialog({
+        title: 'Extract Audio',
+        defaultPath: defaultOutput('_audio', ext),
+        filters: fmt === 'wav' ? [{ name: 'WAV', extensions: ['wav'] }] : fmt === 'aiff' ? [{ name: 'AIFF', extensions: ['aif', 'aiff'] }] : [{ name: 'QuickTime Movie (audio only)', extensions: ['mov'] }],
+      });
+      if (!out) return;
+      await runEditJob('extractAudio', { source, output: out, format: fmt }, 'Extracting audio…', { openable: false });
+      return;
+    }
+
+    if (op === 'remove') {
+      const out = await window.electronAPI.showSaveDialog({
+        title: 'Remove Audio — save picture only',
+        defaultPath: defaultOutput('_noaudio', desc && desc.ext === '.mp4' ? '.mp4' : '.mov'),
+        filters: [{ name: 'QuickTime Movie', extensions: ['mov'] }, { name: 'MP4', extensions: ['mp4'] }, { name: 'MXF', extensions: ['mxf'] }],
+      });
+      if (!out) return;
+      await runEditJob('removeAudio', { source, output: out }, 'Removing audio…');
+      return;
+    }
+
+    if (op === 'replace' || op === 'add') {
+      const picked = await window.electronAPI.showOpenDialog({
+        title: op === 'replace' ? 'Replace Audio — choose the new audio' : 'Add Audio Track — choose the audio to add',
+        properties: ['openFile'],
+        filters: [{ name: 'Audio', extensions: ['wav', 'aif', 'aiff', 'mp3', 'aac', 'm4a', 'flac', 'ac3', 'mov', 'mp4', 'mxf'] }, { name: 'All Files', extensions: ['*'] }],
+      });
+      if (!picked || !picked.length) return;
+      const out = await window.electronAPI.showSaveDialog({
+        title: op === 'replace' ? 'Replace Audio — save as' : 'Add Audio Track — save as',
+        defaultPath: defaultOutput(op === 'replace' ? '_newaudio' : '_addaudio', desc && desc.ext === '.mp4' ? '.mp4' : '.mov'),
+        filters: [{ name: 'QuickTime Movie', extensions: ['mov'] }, { name: 'MP4', extensions: ['mp4'] }, { name: 'MXF', extensions: ['mxf'] }],
+      });
+      if (!out) return;
+      await runEditJob('replaceAudio', { source, audioPath: picked[0], output: out, add: op === 'add' },
+        (op === 'replace' ? 'Replacing' : 'Adding') + ' audio…');
+      return;
+    }
+
+    if (op === 'mute') openMuteDialog(desc);
+  }
+
+  function openMuteDialog(desc) {
+    if (!desc || !desc.audio.length) { alert('This movie has no audio.'); return; }
+    muteTracks.innerHTML = '';
+    desc.audio.forEach((a, t) => {
+      const wrap = document.createElement('div');
+      wrap.className = 'mute-track';
+      const title = document.createElement('div');
+      title.className = 'mute-track-title';
+      const label = document.createElement('span');
+      label.textContent = 'Track ' + (t + 1) + ' — ' + (a.codecFriendly || a.codec) + ', ' + a.channels + ' ch' + (a.channelLayout ? ' (' + a.channelLayout + ')' : '');
+      const all = document.createElement('button');
+      all.textContent = 'mute all';
+      title.appendChild(label); title.appendChild(all);
+      const chans = document.createElement('div');
+      chans.className = 'mute-channels';
+      const boxes = [];
+      for (let c = 0; c < (a.channels || 0); c++) {
+        const l = document.createElement('label');
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.dataset.track = String(t);
+        cb.dataset.channel = String(c);
+        cb.addEventListener('change', () => l.classList.toggle('on', cb.checked));
+        l.appendChild(cb);
+        l.appendChild(document.createTextNode((a.speakerLabels && a.speakerLabels[c]) || ('Ch ' + (c + 1))));
+        chans.appendChild(l);
+        boxes.push(cb);
+      }
+      all.addEventListener('click', () => {
+        const on = !boxes.every((b) => b.checked);
+        boxes.forEach((b) => { b.checked = on; b.dispatchEvent(new Event('change')); });
+      });
+      wrap.appendChild(title); wrap.appendChild(chans);
+      muteTracks.appendChild(wrap);
+    });
+    muteDialog.classList.remove('hidden');
+  }
+
+  document.getElementById('mute-btn-cancel').addEventListener('click', () => muteDialog.classList.add('hidden'));
+  document.getElementById('mute-btn-save').addEventListener('click', async () => {
+    const source = currentEditSource();
+    if (!source) return;
+    const byTrack = new Map();
+    muteTracks.querySelectorAll('input[type="checkbox"]:checked').forEach((cb) => {
+      const t = parseInt(cb.dataset.track, 10);
+      if (!byTrack.has(t)) byTrack.set(t, []);
+      byTrack.get(t).push(parseInt(cb.dataset.channel, 10));
+    });
+    if (!byTrack.size) { alert('Tick at least one channel to mute.'); return; }
+    const out = await window.electronAPI.showSaveDialog({
+      title: 'Mute Channels — save as',
+      defaultPath: defaultOutput('_muted', editDesc && editDesc.ext === '.mp4' ? '.mp4' : '.mov'),
+      filters: [{ name: 'QuickTime Movie', extensions: ['mov'] }, { name: 'MP4', extensions: ['mp4'] }, { name: 'MXF', extensions: ['mxf'] }],
+    });
+    if (!out) return;
+    muteDialog.classList.add('hidden');
+    const mutes = Array.from(byTrack.entries()).map(([track, channels]) => ({ track, channels }));
+    await runEditJob('muteChannels', { source, mutes, output: out }, 'Muting channels…');
+  });
+
+  // ─── Look & framing: LUT preview and aspect-ratio masks ────────────────
+  //
+  // State is owned by the main process (View menu, persistence); this side
+  // renders it. Any control here calls lookUpdate() and waits for the state
+  // to come back rather than mutating a local copy, so the menu, the panel
+  // and the keyboard can never disagree.
+
+  const lutCanvas = document.getElementById('lut-canvas');
+  const maskCanvas = document.getElementById('mask-canvas');
+  const lutBadge = document.getElementById('lut-badge');
+  const lookPanel = document.getElementById('look-panel');
+  const lookLutName = document.getElementById('look-lut-name');
+  const lookLutEnabled = document.getElementById('look-lut-enabled');
+  const lookLutSdi = document.getElementById('look-lut-sdi');
+  const lookLutNote = document.getElementById('look-lut-note');
+  const maskPresetsEl = document.getElementById('mask-presets');
+  const maskCustomInput = document.getElementById('mask-custom');
+  const maskOpacityInput = document.getElementById('mask-opacity');
+  const maskOpacityValue = document.getElementById('mask-opacity-value');
+  const guideCrosshair = document.getElementById('guide-crosshair');
+  const guideAction = document.getElementById('guide-action');
+  const guideTitle = document.getElementById('guide-title');
+
+  // Mirrors MASK_PRESETS in main.js (keys must match).
+  const MASK_PRESETS = [
+    { key: '1.43', label: '1.43', ratio: 1.43 },
+    { key: '1.78', label: '1.78', ratio: 16 / 9 },
+    { key: '1.85', label: '1.85', ratio: 1.85 },
+    { key: '2.39', label: '2.39', ratio: 2.39 },
+    { key: '2.40', label: '2.40', ratio: 2.40 },
+    { key: '9:16', label: '9:16', ratio: 9 / 16 },
+    { key: '4:5', label: '4:5', ratio: 4 / 5 },
+  ];
+
+  let lookState = { lutPath: null, lutEnabled: false, lutToSdi: true, maskPreset: null, maskCustomRatio: 2, maskOpacity: 0.7, crosshair: false, actionSafe: false, titleSafe: false };
+  const masks = window.MaidenMasks.create(maskCanvas, video);
+  let lutRenderer = null;        // created on first use (needs WebGL2)
+  let lutLoadedPath = null;      // the .cube currently in the GPU
+  let lutLoadedInfo = null;      // parsed header for the panel
+  let lutDrawScheduled = false;
+  let lastSdiLut = null;         // what the SDI output was last started with
+
+  function lutActive() {
+    return !!(lookState.lutEnabled && lookState.lutPath && lutRenderer && lutLoadedPath === lookState.lutPath);
+  }
+
+  function ensureLutRenderer() {
+    if (lutRenderer) return lutRenderer;
+    try {
+      lutRenderer = window.MaidenLUT.createRenderer(lutCanvas);
+    } catch (err) {
+      console.error('[LUT] renderer failed:', err.message);
+      lutRenderer = null;
+    }
+    if (!lutRenderer) alert('LUT preview needs WebGL2, which is not available on this GPU. LUTs will still apply to SDI output, exports and saved frames.');
+    return lutRenderer;
+  }
+
+  async function loadLutIntoGpu(lutPath) {
+    if (!lutPath) { lutLoadedPath = null; lutLoadedInfo = null; if (lutRenderer) lutRenderer.setLUT(null); return; }
+    if (lutLoadedPath === lutPath) return;
+    const r = await window.electronAPI.readTextFile(lutPath);
+    if (r.error) { alert('Could not read the LUT:\n\n' + r.error); window.electronAPI.lookUpdate({ lutPath: null, lutEnabled: false }); return; }
+    let lut;
+    try { lut = window.MaidenLUT.parseCube(r.text); } catch (err) {
+      alert('Could not load the LUT:\n\n' + err.message);
+      window.electronAPI.lookUpdate({ lutPath: null, lutEnabled: false });
+      return;
+    }
+    if (!ensureLutRenderer()) { lutLoadedInfo = lut; lutLoadedPath = lutPath; return; }
+    try { lutRenderer.setLUT(lut); } catch (err) {
+      alert('The GPU rejected this LUT:\n\n' + err.message);
+      window.electronAPI.lookUpdate({ lutPath: null, lutEnabled: false });
+      return;
+    }
+    lutLoadedPath = lutPath;
+    lutLoadedInfo = lut;
+    console.log('[LUT] Loaded', lutPath, lut.is3D ? lut.size + '³' : '1D ' + lut.size, lutRenderer.precision);
+  }
+
+  /** Draw the current video frame through the LUT (no-op when the LUT is off). */
+  function drawLutFrame() {
+    if (!lutActive()) return;
+    lutRenderer.draw(video);
+  }
+
+  // While the LUT is on, every presented video frame is redrawn through it.
+  function lutFrameLoop() {
+    lutDrawScheduled = false;
+    if (!lutActive()) return;
+    lutRenderer.draw(video);
+    scheduleLutFrame();
+  }
+  function scheduleLutFrame() {
+    if (lutDrawScheduled || !lutActive()) return;
+    lutDrawScheduled = true;
+    if ('requestVideoFrameCallback' in HTMLVideoElement.prototype) video.requestVideoFrameCallback(lutFrameLoop);
+    else requestAnimationFrame(lutFrameLoop);
+  }
+
+  function applyLutVisibility() {
+    const on = lutActive();
+    video.classList.toggle('lut-active', on);
+    lutCanvas.classList.toggle('hidden', !on);
+    lutBadge.classList.toggle('hidden', !on);
+    if (on) {
+      lutRenderer.setEnabled(true);
+      lutBadge.textContent = 'LUT ' + (lookState.lutPath || '').split(/[\\/]/).pop();
+      drawLutFrame();
+      scheduleLutFrame();
+    } else if (lutRenderer) {
+      lutRenderer.setEnabled(false);
+    }
+  }
+
+  async function applyLookState(state) {
+    const prev = lookState;
+    lookState = Object.assign({}, lookState, state || {});
+
+    // LUT
+    await loadLutIntoGpu(lookState.lutPath);
+    applyLutVisibility();
+    // The SDI output applies the LUT in its own ffmpeg chain; a change in
+    // what it should get means a restart from the current position.
+    const sdiLut = (lookState.lutEnabled && lookState.lutToSdi && lookState.lutPath) || null;
+    if (sdiActive && sdiLut !== lastSdiLut) sdiRestart();
+    lastSdiLut = sdiLut;
+
+    // Masks
+    let ratio = null, label = null;
+    if (lookState.maskPreset === 'custom') { ratio = Number(lookState.maskCustomRatio) || null; label = ratio ? ratio.toFixed(2) : null; }
+    else if (lookState.maskPreset) {
+      const p = MASK_PRESETS.find((k) => k.key === lookState.maskPreset);
+      if (p) { ratio = p.ratio; label = p.label; }
+    }
+    masks.setState({ ratio, label, opacity: lookState.maskOpacity, crosshair: lookState.crosshair, actionSafe: lookState.actionSafe, titleSafe: lookState.titleSafe });
+
+    renderLookPanel();
+    if (prev.lutPath !== lookState.lutPath || prev.lutEnabled !== lookState.lutEnabled) updateExportNote();
+  }
+
+  function renderLookPanel() {
+    const name = lookState.lutPath ? lookState.lutPath.split(/[\\/]/).pop() : null;
+    lookLutName.textContent = name || 'No LUT loaded';
+    lookLutName.title = lookState.lutPath || '';
+    lookLutEnabled.checked = !!lookState.lutEnabled;
+    lookLutEnabled.disabled = !lookState.lutPath;
+    lookLutSdi.checked = !!lookState.lutToSdi;
+    if (lutLoadedInfo && lookState.lutPath) {
+      lookLutNote.textContent = (lutLoadedInfo.title ? '"' + lutLoadedInfo.title + '" — ' : '') +
+        (lutLoadedInfo.is3D ? lutLoadedInfo.size + '×' + lutLoadedInfo.size + '×' + lutLoadedInfo.size + ' 3D' : '1D, ' + lutLoadedInfo.size + ' points') +
+        (lutRenderer && lutRenderer.precision ? ' · GPU ' + lutRenderer.precision : '') +
+        '. Applied to the display picture; SDI, exports and saved frames use ffmpeg lut3d (tetrahedral).';
+    } else {
+      lookLutNote.textContent = 'Load a .cube (1D or 3D). U toggles it during playback.';
+    }
+
+    maskPresetsEl.innerHTML = '';
+    const off = document.createElement('button');
+    off.className = 'mask-preset' + (!lookState.maskPreset ? ' active' : '');
+    off.textContent = 'Off';
+    off.addEventListener('click', () => window.electronAPI.lookUpdate({ maskPreset: null }));
+    maskPresetsEl.appendChild(off);
+    for (const p of MASK_PRESETS) {
+      const b = document.createElement('button');
+      b.className = 'mask-preset' + (lookState.maskPreset === p.key ? ' active' : '');
+      b.textContent = p.label;
+      b.addEventListener('click', () => window.electronAPI.lookUpdate({ maskPreset: p.key }));
+      maskPresetsEl.appendChild(b);
+    }
+    if (document.activeElement !== maskCustomInput) maskCustomInput.value = Number(lookState.maskCustomRatio || 2).toFixed(2);
+    document.getElementById('btn-mask-custom').classList.toggle('active', lookState.maskPreset === 'custom');
+    maskOpacityInput.value = String(lookState.maskOpacity);
+    maskOpacityValue.textContent = Math.round(lookState.maskOpacity * 100) + '%';
+    guideCrosshair.checked = !!lookState.crosshair;
+    guideAction.checked = !!lookState.actionSafe;
+    guideTitle.checked = !!lookState.titleSafe;
+  }
+
+  function toggleLut() {
+    if (!lookState.lutPath) { window.electronAPI.openLutDialog(); return; }
+    window.electronAPI.lookUpdate({ lutEnabled: !lookState.lutEnabled });
+  }
+
+  function toggleLookPanel(force) {
+    if (force && force.show) { togglePanel(lookPanel); if (lookPanel.classList.contains('hidden')) lookPanel.classList.remove('hidden'); return; }
+    togglePanel(lookPanel);
+  }
+
+  btnLook.addEventListener('click', () => toggleLookPanel());
+  document.getElementById('btn-close-look').addEventListener('click', () => lookPanel.classList.add('hidden'));
+  document.getElementById('btn-look-load-lut').addEventListener('click', () => window.electronAPI.openLutDialog());
+  document.getElementById('btn-look-clear-lut').addEventListener('click', () => window.electronAPI.lookUpdate({ lutPath: null, lutEnabled: false }));
+  lookLutEnabled.addEventListener('change', () => window.electronAPI.lookUpdate({ lutEnabled: lookLutEnabled.checked }));
+  lookLutSdi.addEventListener('change', () => window.electronAPI.lookUpdate({ lutToSdi: lookLutSdi.checked }));
+  document.getElementById('btn-mask-custom').addEventListener('click', () => {
+    const v = parseFloat(maskCustomInput.value);
+    if (!(v > 0.2 && v < 5)) { alert('Enter an aspect ratio between 0.20 and 5.00 (width ÷ height).'); return; }
+    window.electronAPI.lookUpdate({ maskPreset: 'custom', maskCustomRatio: v });
+  });
+  maskCustomInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') document.getElementById('btn-mask-custom').click(); e.stopPropagation(); });
+  maskOpacityInput.addEventListener('input', () => {
+    // Live preview while dragging; the persisted update follows on release.
+    masks.setState({ opacity: parseFloat(maskOpacityInput.value) });
+    maskOpacityValue.textContent = Math.round(parseFloat(maskOpacityInput.value) * 100) + '%';
+  });
+  maskOpacityInput.addEventListener('change', () => window.electronAPI.lookUpdate({ maskOpacity: parseFloat(maskOpacityInput.value) }));
+  guideCrosshair.addEventListener('change', () => window.electronAPI.lookUpdate({ crosshair: guideCrosshair.checked }));
+  guideAction.addEventListener('change', () => window.electronAPI.lookUpdate({ actionSafe: guideAction.checked }));
+  guideTitle.addEventListener('change', () => window.electronAPI.lookUpdate({ titleSafe: guideTitle.checked }));
+  window.addEventListener('resize', () => masks.redraw());
+  new ResizeObserver(() => masks.redraw()).observe(document.getElementById('video-container'));
+
+  window.electronAPI.onLookState((state) => { applyLookState(state); });
+  window.electronAPI.lookGet().then((state) => applyLookState(state)).catch(() => {});
+
+  // ─── Commands from the menus ───────────────────────────────────────────
+
+  function closeEditingUi() {
+    exportDialog.classList.add('hidden');
+    muteDialog.classList.add('hidden');
+    markersPanel.classList.add('hidden');
+    combinePanel.classList.add('hidden');
+    lookPanel.classList.add('hidden');
+  }
+
+  window.electronAPI.onEditCommand((name, payload) => {
+    switch (name) {
+      case 'set-in': setInPoint(); break;
+      case 'set-out': setOutPoint(); break;
+      case 'go-in': goToIn(); break;
+      case 'go-out': goToOut(); break;
+      case 'clear-in-out': clearInOut(); break;
+      case 'play-selection': playSelection(); break;
+      case 'export': openExportDialog(payload || {}); break;
+      case 'delete-selection': deleteSelection(); break;
+      case 'copy-selection': copySelectionToBin(); break;
+      case 'append-movie': appendMovie(); break;
+      case 'toggle-combine-panel': togglePanel(combinePanel); break;
+      case 'save-frame': saveCurrentFrame(); break;
+      case 'audio-op': audioOp(payload || {}); break;
+      case 'add-marker': addMarker(); break;
+      case 'delete-marker': deleteMarkerAtPlayhead(); break;
+      case 'next-marker': nextMarker(); break;
+      case 'prev-marker': prevMarker(); break;
+      case 'toggle-markers-panel': togglePanel(markersPanel); renderMarkersPanelActive(); break;
+      case 'export-markers': exportMarkers(); break;
+      case 'clear-markers': clearMarkers(); break;
+      case 'toggle-look-panel': toggleLookPanel(payload); break;
+      default: console.warn('[Edit] Unknown command:', name);
+    }
+  });
+
+  updateSelectionUI();
 
   // ─── Fullscreen Polling ───────────────────────────────
 

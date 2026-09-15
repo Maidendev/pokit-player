@@ -201,6 +201,80 @@ End of life. Worth scheduling an upgrade for the security fixes.
 
 ---
 
+## Editing layer — deferred from the 2026-09-15 pass
+
+The QuickTime 7 Pro-style utilities (In/Out trim, delete, combine, save frame, audio
+ops, markers), LUT preview and aspect-ratio masks shipped on 2026-09-15 (see the table
+below). These are the parts that were consciously left out, and why.
+
+### Smart-render for long-GOP cuts
+
+**What ships:** a lossless cut on H.264 / HEVC / MPEG-2 snaps to the nearest keyframe
+and says so, with the frame delta, before anything is written. A frame-accurate cut on
+those codecs is a full re-encode of the range.
+
+**What QuickTime 7 did:** re-encode only the two edge GOPs and copy everything between —
+frame accurate *and* almost lossless. That needs the new edge GOPs to be encoded with
+parameters the copied stream accepts (profile, level, SPS/PPS, reference structure), then
+concatenated without the decoder noticing. With libx264 that is achievable for H.264
+(match profile/level, force closed GOP, splice at IDR), fiddly for HEVC, and not worth
+attempting for MPEG-2 in MXF. **Estimate:** a week for H.264 in MOV/MP4 with a real test
+matrix; prove it on OP1a MXF separately.
+
+### Editing Blackmagic RAW
+
+`.braw` decodes through `braw-decode`, not ffmpeg, so none of the editing operations can
+open it. Trim/export would mean piping the helper's raw frames into an encode (there is no
+"lossless" for BRAW → anything). Save Frame is the useful one and is the cheapest: one
+frame from the helper → ffmpeg image encoder. Not started.
+
+### Drop-frame timecode carried into cuts
+
+The new file's start timecode is the source TC offset by the cut point. Drop-frame (`;`)
+is handled with the SMPTE 29.97 / 59.94 drop rule and verified at the minute and
+ten-minute boundaries, but only against synthetic values — no drop-frame footage was
+available to round-trip through ffmpeg's `-timecode`. Check on a real 29.97 DF master.
+
+### Markers beyond this machine
+
+Markers persist per file in the renderer's localStorage and export to CSV / text / JSON.
+Deferred: a sidecar next to the media (so markers travel with the file), import, and an
+EDL / Resolve marker format. All small once someone says which format their editorial
+actually wants.
+
+### LUT scope
+
+The preview applies the `.cube` to the display-referred 8-bit picture, which is the right
+model for a viewing LUT. Not done: colour-managing scene-referred sources (log → display
+transforms, OCIO), input/output colour-space selection, LUT strength, and stacking two
+LUTs (camera + show). Also the GPU path is trilinear while SDI/export are tetrahedral;
+they match to within display precision but are not bit-identical.
+
+### Mask output
+
+Masks and guides are drawn on the desktop only. Burning the mask into the SDI output or an
+export is one more ffmpeg `drawbox` stage in the same chains the LUT uses — cheap, but
+nobody has asked for it and a masked projector picture is usually the wrong thing.
+
+---
+
+## Shipped 2026-09-15
+
+| Client ask | Status |
+|---|---|
+| Simple In/Out editing — trim, delete, copy, export | `I` / `O`, edit bar, Trim / Delete / To Bin / Export; lossless or encode |
+| Marker set on `M` | Markers at source TC on the scrubber; panel, names, persist per file, CSV/TXT/JSON export |
+| Append / combine movies | Combine panel with reorder, clip bin (`⌘B`), lossless-join check with reasons; Append Movie… |
+| Save current frame | PNG / JPEG / TIFF / DPX / EXR from the source, bit depth follows the source, LUT baked when on |
+| Extract / replace / add / mute audio | WAV / AIFF / original codec; remove; replace; add track; per-channel mute with speaker labels |
+| Lossless where possible | Stream copy by default; long-GOP keyframe snap shown before writing; source TC carried into the cut |
+| LUT support | `.cube` 1D/3D, `U` toggle, GPU preview, optional on Blackmagic output, bake into exports/stills |
+| Aspect-ratio masks | 1.43 / 1.78 / 1.85 / 2.39 / 2.40 / 9:16 / 4:5 + custom, adjustable opacity, crosshair, action/title safe |
+
+Also in this pass: Mute moved to `Shift+M`; `secondsToTimecode` no longer reports the frame
+before an exact frame boundary (floating-point floor); the SDI session now receives the
+sequence's first frame so Loop returns to the true start.
+
 ## Shipped 2026-08-11
 
 | Spec | Status |
