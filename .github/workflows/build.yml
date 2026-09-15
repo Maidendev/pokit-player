@@ -118,6 +118,45 @@ jobs:
           lipo -archs src/bin/sdi-out | grep -q arm64  || { echo "::error title=sdi-out not universal::missing arm64 slice";  exit 1; }
           lipo -archs src/bin/sdi-out | grep -q x86_64 || { echo "::error title=sdi-out not universal::missing x86_64 slice"; exit 1; }
 
+      # The same helper for Windows, from the same source. The DeckLink API is
+      # a registered COM server there, reached through the header midl
+      # generates from Blackmagic's .idl files (committed under sdk/Win). cl
+      # and midl come from the Visual Studio C++ tools already on the runner:
+      # vswhere finds the install, vcvars64 sets up its environment, and the
+      # variables that matter are handed to the next step through GITHUB_ENV.
+      # No third-party action — the same supply-chain stance as the ffmpeg
+      # fetch above.
+      #
+      # The redirection goes BEFORE the echo on purpose: `echo X=%PATH%>>file`
+      # would read a trailing digit in the value as a handle number.
+      - name: Enter the Visual Studio x64 developer environment
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSPATH=%%i"
+          if not defined VSPATH (echo ::error title=Visual Studio not found::this runner has no C++ build tools& exit /b 1)
+          call "%VSPATH%\VC\Auxiliary\Build\vcvars64.bat" >nul || exit /b 1
+          >>"%GITHUB_ENV%" echo PATH=%PATH%
+          >>"%GITHUB_ENV%" echo INCLUDE=%INCLUDE%
+          >>"%GITHUB_ENV%" echo LIB=%LIB%
+          >>"%GITHUB_ENV%" echo LIBPATH=%LIBPATH%
+          >>"%GITHUB_ENV%" echo WindowsSdkDir=%WindowsSdkDir%
+          >>"%GITHUB_ENV%" echo WindowsSDKVersion=%WindowsSDKVersion%
+          >>"%GITHUB_ENV%" echo VCToolsInstallDir=%VCToolsInstallDir%
+
+      - name: Build SDI output helper (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          log="$RUNNER_TEMP/sdi-out-build.log"
+          if ! bash scripts/build-sdi-out-win.sh 2>&1 | tee "$log"; then
+            esc() { sed -e 's/%/%25/g' | awk 'BEGIN{ORS="%0A"}{print}'; }
+            echo "::error title=sdi-out.exe helper build failed::$(tail -40 "$log" | esc)"
+            exit 1
+          fi
+          [[ -f src/bin/sdi-out.exe ]] || { echo "::error title=sdi-out.exe missing::the build produced no helper"; exit 1; }
+
       # Say plainly in the log whether this build will be signed. Without this
       # an unsigned build looks identical to a signed one until a user hits
       # the Gatekeeper warning.
@@ -469,6 +508,21 @@ jobs:
           # EEXIST on macOS (electron-userland/electron-builder#3179,
           # #7093, #6570). Forces real copies instead of hardlinks.
           USE_HARD_LINKS: false
+
+      # The Windows helper has to be inside the package, or External Video
+      # Output says the feature is not installed. Run it from where it was
+      # packed: this runner has no Desktop Video, so the right answer is []
+      # after a not-registered diag line, exit 0 — anything else is a fault.
+      - name: Verify Windows build
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          exe=$(find dist -path '*app.asar.unpacked/src/bin/sdi-out.exe' -type f 2>/dev/null | head -1) || true
+          [[ -n "$exe" ]] || { echo "::error title=sdi-out.exe is not in the package::External Video Output would say the feature is not installed"; exit 1; }
+          echo "sdi-out.exe : $exe"
+          "$exe" --list-devices
+          echo "exit=$?"
 
       # Prove BOTH Mac builds exist and that each one is genuinely the arch it
       # is named for. Cross-arch mistakes here are invisible until an Intel

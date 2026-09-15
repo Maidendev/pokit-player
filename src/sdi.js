@@ -26,10 +26,10 @@
  * schedule sharing that thread drops frames. A separate process also means a
  * driver fault cannot take the player down in the middle of a screening.
  *
- * The native helper lives in native/sdi-out/ and is NOT built yet — it needs
- * Blackmagic's Desktop Video SDK, which is a separate registration-gated
- * download. Everything in this module that does not need the helper is
- * implemented and tested; device control reports plainly when it is absent.
+ * The native helper lives in native/sdi-out/ and is built for macOS and
+ * Windows in CI from the committed DeckLink SDK headers (see its README).
+ * Everything in this module that does not need the helper is implemented and
+ * tested; device control reports plainly when it is absent.
  */
 
 const path = require('path');

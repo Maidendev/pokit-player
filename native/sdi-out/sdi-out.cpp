@@ -40,17 +40,32 @@
 //     UltraStudio look "capture-only" on Desktop Video 14.5. The interfaces
 //     that changed between 15.3.1 and 16.0 are therefore asked for by both
 //     IIDs — see "Driver generations" below.
+//
+//  6. One source builds for macOS AND Windows. The API is COM on both, so
+//     every DeckLink call is identical; what differs is how the API is
+//     reached (a framework loaded at runtime vs. a registered COM server),
+//     the string type it hands back (CFStringRef vs. BSTR), bool vs. BOOL in
+//     out-parameters, and how a child sees the pipes its parent gave it. All
+//     of that lives in the "Platform" section and nowhere else.
 
-#include "DeckLinkAPI.h"
-#include "DeckLinkAPIVersion.h"
-#include "DeckLinkAPIVideoOutput_v15_3_1.h"   // previous-generation IIDs and types; pulls in DeckLinkAPI_v15_3_1.h
-
-#include <CoreFoundation/CoreFoundation.h>
-#include <dlfcn.h>
-#include <fcntl.h>
-#include <sys/stat.h>
-#include <sys/sysctl.h>
-#include <unistd.h>
+#if defined(_WIN32)
+  #include <windows.h>
+  #include <objbase.h>
+  #include <fcntl.h>
+  #include <io.h>
+  #include "DeckLinkAPI_h.h"      // midl's output from sdk/Win/include/DeckLinkAPI.idl — see scripts/build-sdi-out-win.sh
+  #include "DeckLinkAPIVersion.h"
+#else
+  #include "DeckLinkAPI.h"
+  #include "DeckLinkAPIVersion.h"
+  #include "DeckLinkAPIVideoOutput_v15_3_1.h"   // previous-generation IIDs and types; pulls in DeckLinkAPI_v15_3_1.h
+  #include <CoreFoundation/CoreFoundation.h>
+  #include <dlfcn.h>
+  #include <fcntl.h>
+  #include <sys/stat.h>
+  #include <sys/sysctl.h>
+  #include <unistd.h>
+#endif
 
 #include <algorithm>
 #include <atomic>
@@ -80,7 +95,77 @@ constexpr BMDPixelFormat kPixelFormat = bmdFormat10BitYUV;
 // Small helpers
 // ---------------------------------------------------------------------------
 
-std::string cfToStd(CFStringRef s) {
+// ---------------------------------------------------------------------------
+// Platform
+// ---------------------------------------------------------------------------
+
+#ifndef STDMETHODCALLTYPE
+  #define STDMETHODCALLTYPE            // Windows' calling-convention tag; nothing on macOS
+#endif
+
+#if defined(_WIN32)
+
+using BmdString = BSTR;
+using BmdBool   = BOOL;                // what the API fills in through an out-parameter
+
+std::string bmdToStd(BSTR s) {
+  if (!s) return {};
+  const int len = static_cast<int>(::SysStringLen(s));
+  const int bytes = ::WideCharToMultiByte(CP_UTF8, 0, s, len, nullptr, 0, nullptr, nullptr);
+  if (bytes <= 0) return {};
+  std::string out(static_cast<size_t>(bytes), '\0');
+  ::WideCharToMultiByte(CP_UTF8, 0, s, len, out.data(), bytes, nullptr, nullptr);
+  return out;
+}
+void bmdFree(BSTR s) { if (s) ::SysFreeString(s); }
+
+// Desktop Video installs DeckLinkAPI64.dll and registers it as a COM server.
+// CoCreateInstance failing with REGDB_E_CLASSNOTREG is the Windows form of
+// "Desktop Video is not installed"; the code is kept for the diagnostics.
+HRESULT gLastCreate = S_OK;
+IDeckLinkIterator* createIterator() {
+  IDeckLinkIterator* it = nullptr;
+  gLastCreate = ::CoCreateInstance(CLSID_CDeckLinkIterator, nullptr, CLSCTX_ALL, IID_IDeckLinkIterator,
+                                   reinterpret_cast<void**>(&it));
+  return gLastCreate == S_OK ? it : nullptr;
+}
+IDeckLinkAPIInformation* createApiInformation() {
+  IDeckLinkAPIInformation* info = nullptr;
+  const HRESULT hr = ::CoCreateInstance(CLSID_CDeckLinkAPIInformation, nullptr, CLSCTX_ALL, IID_IDeckLinkAPIInformation,
+                                        reinterpret_cast<void**>(&info));
+  return hr == S_OK ? info : nullptr;
+}
+
+// The previous-generation IIDs, and the one previous-generation interface
+// whose vtable differs (see "Driver generations"). The Mac build takes these
+// from Blackmagic's compatibility headers. The Windows SDK ships the same as
+// a separate .idl that does not import the main one, and midl's output for
+// both in one file collides on the shared typedefs — so the three GUIDs are
+// written out here instead, copied from DeckLinkAPI_v15_3_1.idl.
+const IID IID_IDeckLinkOutput_v15_3_1            = { 0x1A8077F1, 0x9FE2, 0x4533, { 0x81, 0x47, 0x22, 0x94, 0x30, 0x5E, 0x25, 0x3F } };
+const IID IID_IDeckLinkVideoBuffer_v15_3_1       = { 0xCCB4B64A, 0x5C86, 0x4E02, { 0xB7, 0x78, 0x88, 0x5D, 0x35, 0x27, 0x09, 0xFE } };
+const IID IID_IDeckLinkProfileAttributes_v15_3_1 = { 0x17D4BF8E, 0x4911, 0x473A, { 0x80, 0xA0, 0x73, 0x1C, 0xF6, 0xFF, 0x34, 0x5B } };
+
+struct IDeckLinkVideoBuffer_v15_3_1 : public IUnknown {
+  virtual HRESULT STDMETHODCALLTYPE GetBytes(void** buffer) = 0;
+  virtual HRESULT STDMETHODCALLTYPE StartAccess(BMDBufferAccessFlags flags) = 0;
+  virtual HRESULT STDMETHODCALLTYPE EndAccess(BMDBufferAccessFlags flags) = 0;
+};
+
+// A child of Node sees the extra pipe its parent opened as CRT fd 3 — libuv
+// hands the handle table over in STARTUPINFO, and the CRT reads it — so the
+// same fd numbers work here as on POSIX. _get_osfhandle on a fd that is NOT
+// there would trip the CRT's invalid-parameter handler, whose default is to
+// end the process; main() installs a quiet one first.
+FILE* fdOpenRead(int fd) { return ::_fdopen(fd, "r"); }
+bool  fdExists(int fd)   { return ::_get_osfhandle(fd) != -1; }
+
+#else
+
+using BmdString = CFStringRef;
+using BmdBool   = bool;
+
+std::string bmdToStd(CFStringRef s) {
   if (!s) return {};
   const CFIndex max = CFStringGetMaximumSizeForEncoding(CFStringGetLength(s), kCFStringEncodingUTF8) + 1;
   std::string out(static_cast<size_t>(max), '\0');
@@ -88,6 +173,23 @@ std::string cfToStd(CFStringRef s) {
   out.resize(std::strlen(out.c_str()));
   return out;
 }
+void bmdFree(CFStringRef s) { if (s) CFRelease(s); }
+
+IDeckLinkIterator*       createIterator()       { return CreateDeckLinkIteratorInstance(); }
+IDeckLinkAPIInformation* createApiInformation() { return CreateDeckLinkAPIInformationInstance(); }
+
+FILE* fdOpenRead(int fd) { return ::fdopen(fd, "r"); }
+bool  fdExists(int fd)   { return ::fcntl(fd, F_GETFD) != -1; }
+
+#endif
+
+/** A string the API hands back, released when this goes out of scope. */
+struct BmdStr {
+  BmdString s = nullptr;
+  ~BmdStr() { bmdFree(s); }
+  BmdString* out() { return &s; }
+  std::string str() const { return bmdToStd(s); }
+};
 
 std::string jsonEscape(const std::string& in) {
   std::string out;
@@ -137,7 +239,12 @@ void fail(const std::string& s) {
 bool readFully(int fd, void* dst, size_t n) {
   auto* p = static_cast<uint8_t*>(dst);
   while (n > 0) {
+#if defined(_WIN32)
+    // _read takes an unsigned count; a 4K frame is 24 MB, well inside it.
+    const int got = ::_read(fd, p, static_cast<unsigned>(std::min<size_t>(n, 1u << 30)));
+#else
     const ssize_t got = ::read(fd, p, n);
+#endif
     if (got <= 0) return false;
     p += got;
     n -= static_cast<size_t>(got);
@@ -180,11 +287,11 @@ std::string gInstalledApiString;       // e.g. "14.5", for messages
 /** Read the installed API version once. Both stay 0/empty when it is not loaded. */
 void readInstalledApiVersion() {
   if (gInstalledApi) return;
-  if (IDeckLinkAPIInformation* info = CreateDeckLinkAPIInformationInstance()) {
+  if (IDeckLinkAPIInformation* info = createApiInformation()) {
     int64_t v = 0;
     if (info->GetInt(BMDDeckLinkAPIVersion, &v) == S_OK) gInstalledApi = v;
-    CFStringRef s = nullptr;
-    if (info->GetString(BMDDeckLinkAPIVersion, &s) == S_OK && s) { gInstalledApiString = cfToStd(s); CFRelease(s); }
+    BmdStr s;
+    if (info->GetString(BMDDeckLinkAPIVersion, s.out()) == S_OK) gInstalledApiString = s.str();
     info->Release();
   }
 }
@@ -292,6 +399,36 @@ std::string duplexName(int64_t d) {
  * an empty list. These lines are what the Output Diagnostics dialog shows.
  */
 void emitDiagnostics(bool apiLoaded) {
+#if defined(_WIN32)
+  // Is the COM server registered, and which DLL is it? The registry says so
+  // without loading anything — the same role the framework's Info.plist
+  // plays on macOS — and the DLL's file version IS the Desktop Video version.
+  static const char* kInproc = "CLSID\\{BA6C6F44-6DA5-4DCE-94AA-EE2D1372A676}\\InprocServer32";   // CDeckLinkIterator
+  char dll[MAX_PATH] = { 0 };
+  DWORD sz = sizeof dll;
+  const bool present = ::RegGetValueA(HKEY_CLASSES_ROOT, kInproc, nullptr, RRF_RT_REG_SZ, nullptr, dll, &sz) == ERROR_SUCCESS;
+  if (present) std::fprintf(stderr, "diag:com-server registered %s\n", dll);
+  else         std::fprintf(stderr, "diag:com-server not-registered\n");
+
+  if (present) {
+    DWORD handle = 0;
+    if (const DWORD vsz = ::GetFileVersionInfoSizeA(dll, &handle)) {
+      std::vector<uint8_t> buf(vsz);
+      VS_FIXEDFILEINFO* ffi = nullptr;
+      UINT flen = 0;
+      if (::GetFileVersionInfoA(dll, 0, vsz, buf.data()) &&
+          ::VerQueryValueA(buf.data(), "\\", reinterpret_cast<void**>(&ffi), &flen) && ffi) {
+        std::fprintf(stderr, "diag:desktop-video-installed %u.%u.%u (build %u)\n",
+                     unsigned(HIWORD(ffi->dwFileVersionMS)), unsigned(LOWORD(ffi->dwFileVersionMS)),
+                     unsigned(HIWORD(ffi->dwFileVersionLS)), unsigned(LOWORD(ffi->dwFileVersionLS)));
+      }
+    }
+  }
+
+  if (present && !apiLoaded)
+    std::fprintf(stderr, "diag:cocreate failed 0x%08lx (the server is registered but would not load)\n",
+                 static_cast<unsigned long>(gLastCreate));
+#else
   static const char* kFramework = "/Library/Frameworks/DeckLinkAPI.framework";
   struct stat st;
   const bool present = (::stat(kFramework, &st) == 0);
@@ -307,7 +444,7 @@ void emitDiagnostics(bool apiLoaded) {
         auto* ver = static_cast<CFStringRef>(CFBundleGetValueForInfoDictionaryKey(b, CFSTR("CFBundleShortVersionString")));
         auto* build = static_cast<CFStringRef>(CFBundleGetValueForInfoDictionaryKey(b, CFSTR("CFBundleVersion")));
         std::fprintf(stderr, "diag:desktop-video-installed %s (build %s)\n",
-                     ver ? cfToStd(ver).c_str() : "?", build ? cfToStd(build).c_str() : "?");
+                     ver ? bmdToStd(ver).c_str() : "?", build ? bmdToStd(build).c_str() : "?");
         CFRelease(b);
       }
       CFRelease(url);
@@ -322,6 +459,7 @@ void emitDiagnostics(bool apiLoaded) {
     if (h) std::fprintf(stderr, "diag:dlopen ok (the framework loads, but the entry points did not resolve)\n");
     else   std::fprintf(stderr, "diag:dlopen failed: %s\n", ::dlerror());
   }
+#endif
 
   readInstalledApiVersion();
   if (gInstalledApi) std::fprintf(stderr, "diag:desktop-video-api %s\n", gInstalledApiString.c_str());
@@ -343,6 +481,8 @@ void emitDiagnostics(bool apiLoaded) {
     std::fprintf(stderr, "diag:driver-generation current\n");
 #if defined(__arm64__)
   std::fprintf(stderr, "diag:helper-arch arm64\n");
+#elif defined(_WIN32)
+  std::fprintf(stderr, "diag:helper-arch x86_64\n");
 #else
   // An x86_64 slice on an Apple Silicon Mac means Rosetta — which happens
   // when the Intel build of the app is installed there, because a translated
@@ -357,14 +497,21 @@ void emitDiagnostics(bool apiLoaded) {
 }
 
 int listDevices() {
-  IDeckLinkIterator* it = CreateDeckLinkIteratorInstance();
+  IDeckLinkIterator* it = createIterator();
   emitDiagnostics(it != nullptr);
   if (!it) {
+#if defined(_WIN32)
+    if (gLastCreate == REGDB_E_CLASSNOTREG)
+      fail("Desktop Video is not installed (the DeckLink COM server is not registered), so there are no devices to list");
+    else
+      fail("Desktop Video is installed, but its API could not be loaded — see the diag lines above for the COM error");
+#else
     struct stat st;
     if (::stat("/Library/Frameworks/DeckLinkAPI.framework", &st) == 0)
       fail("Desktop Video is installed, but its API could not be loaded — see the diag lines above for dyld's reason");
     else
       fail("Desktop Video is not installed (no DeckLinkAPI.framework), so there are no devices to list");
+#endif
     std::printf("[]\n");
     return 0;
   }
@@ -379,9 +526,8 @@ int listDevices() {
 
   while (it->Next(&dl) == S_OK) {
     std::string name, model;
-    CFStringRef cf = nullptr;
-    if (dl->GetDisplayName(&cf) == S_OK && cf) { name = cfToStd(cf); CFRelease(cf); cf = nullptr; }
-    if (dl->GetModelName(&cf) == S_OK && cf)   { model = cfToStd(cf); CFRelease(cf); cf = nullptr; }
+    { BmdStr s; if (dl->GetDisplayName(s.out()) == S_OK) name = s.str(); }
+    { BmdStr s; if (dl->GetModelName(s.out()) == S_OK)   model = s.str(); }
 
     // Capture-only devices have no output interface and are skipped, but the
     // index still advances so it stays a stable iterator position.
@@ -416,7 +562,7 @@ int listDevices() {
           // the hardware here is what lets the player stop guessing.
           if (dm->GetFieldDominance() == bmdProgressiveFrame) {
             BMDDisplayMode actual = 0;
-            bool supported = false;
+            BmdBool supported = false;
             const HRESULT hr = out->DoesSupportVideoMode(
                 bmdVideoConnectionSDI, dm->GetDisplayMode(), kPixelFormat,
                 bmdNoVideoOutputConversion, bmdSupportedVideoModeDefault, &actual, &supported);
@@ -425,7 +571,7 @@ int listDevices() {
               BMDTimeScale scale = 0;
               dm->GetFrameRate(&dur, &scale);
               std::string mname;
-              if (dm->GetName(&cf) == S_OK && cf) { mname = cfToStd(cf); CFRelease(cf); cf = nullptr; }
+              { BmdStr s; if (dm->GetName(s.out()) == S_OK) mname = s.str(); }
               std::printf("%s{\"id\":\"%s\",\"name\":\"%s\",\"width\":%ld,\"height\":%ld,"
                           "\"fps\":%.6g,\"fpsRational\":\"%lld/%lld\"}",
                           firstMode ? "" : ",",
@@ -486,12 +632,27 @@ class Player;
 class OutputCallback : public IDeckLinkVideoOutputCallback {
  public:
   explicit OutputCallback(Player* p) : player_(p), refs_(1) {}
-  HRESULT ScheduledFrameCompleted(IDeckLinkVideoFrame* f, BMDOutputFrameCompletionResult r) override;
-  HRESULT ScheduledPlaybackHasStopped() override;
+  HRESULT STDMETHODCALLTYPE ScheduledFrameCompleted(IDeckLinkVideoFrame* f, BMDOutputFrameCompletionResult r) override;
+  HRESULT STDMETHODCALLTYPE ScheduledPlaybackHasStopped() override;
 
-  HRESULT QueryInterface(REFIID, LPVOID*) override { return E_NOINTERFACE; }
-  ULONG AddRef() override { return ++refs_; }
-  ULONG Release() override {
+  // Answer for IUnknown and for the callback interface itself — the Windows
+  // driver may ask before it will accept the callback. Anything else: no.
+  HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, LPVOID* ppv) override {
+    if (!ppv) return E_POINTER;
+#if defined(_WIN32)
+    const bool known = (iid == IID_IUnknown) || (iid == IID_IDeckLinkVideoOutputCallback);
+#else
+    const CFUUIDBytes unknown = CFUUIDGetUUIDBytes(IUnknownUUID);
+    const bool known = std::memcmp(&iid, &unknown, sizeof iid) == 0 ||
+                       std::memcmp(&iid, &IID_IDeckLinkVideoOutputCallback, sizeof iid) == 0;
+#endif
+    if (!known) { *ppv = nullptr; return E_NOINTERFACE; }
+    *ppv = static_cast<IDeckLinkVideoOutputCallback*>(this);
+    AddRef();
+    return S_OK;
+  }
+  ULONG STDMETHODCALLTYPE AddRef() override { return ++refs_; }
+  ULONG STDMETHODCALLTYPE Release() override {
     const ULONG r = --refs_;
     if (r == 0) delete this;
     return r;
@@ -560,9 +721,8 @@ class Player {
       return false;
     }
 
-    CFStringRef cf = nullptr;
     std::string mname;
-    if (mode_->GetName(&cf) == S_OK && cf) { mname = cfToStd(cf); CFRelease(cf); }
+    { BmdStr s; if (mode_->GetName(s.out()) == S_OK) mname = s.str(); }
     status("mode " + fourccToString(mode_->GetDisplayMode()) + " " + mname + " " +
            std::to_string(width_) + "x" + std::to_string(height_) +
            " rowbytes=" + std::to_string(cardRowBytes_) + " buffer=" + std::to_string(gPoolFrames));
@@ -576,7 +736,7 @@ class Player {
     if (!startPlayback()) return 1;
 
     // Control lines on fd 3, when the player gave us one. Otherwise run to EOF.
-    FILE* ctl = (controlFd >= 0) ? fdopen(controlFd, "r") : nullptr;
+    FILE* ctl = (controlFd >= 0) ? fdOpenRead(controlFd) : nullptr;
     std::thread control;
     if (ctl) {
       control = std::thread([this, ctl] {
@@ -826,11 +986,11 @@ class Player {
   uint64_t underrunTotal_ = 0, dropped_ = 0, late_ = 0;
 };
 
-HRESULT OutputCallback::ScheduledFrameCompleted(IDeckLinkVideoFrame* f, BMDOutputFrameCompletionResult r) {
+HRESULT STDMETHODCALLTYPE OutputCallback::ScheduledFrameCompleted(IDeckLinkVideoFrame* f, BMDOutputFrameCompletionResult r) {
   player_->onFrameCompleted(f, r);
   return S_OK;
 }
-HRESULT OutputCallback::ScheduledPlaybackHasStopped() {
+HRESULT STDMETHODCALLTYPE OutputCallback::ScheduledPlaybackHasStopped() {
   player_->onPlaybackStopped();
   return S_OK;
 }
@@ -840,7 +1000,7 @@ HRESULT OutputCallback::ScheduledPlaybackHasStopped() {
 // ---------------------------------------------------------------------------
 
 int play(int deviceIndex, const std::string& modeId, int controlFd) {
-  IDeckLinkIterator* it = CreateDeckLinkIteratorInstance();
+  IDeckLinkIterator* it = createIterator();
   if (!it) {
     fail("Desktop Video is not installed, so there is no device to play to");
     return 1;
@@ -894,7 +1054,7 @@ int play(int deviceIndex, const std::string& modeId, int controlFd) {
     return 1;
   }
 
-  bool supported = false;
+  BmdBool supported = false;
   BMDDisplayMode actual = 0;
   if (out->DoesSupportVideoMode(bmdVideoConnectionSDI, want, kPixelFormat, bmdNoVideoOutputConversion,
                                 bmdSupportedVideoModeDefault, &actual, &supported) != S_OK || !supported) {
@@ -933,6 +1093,15 @@ void usage() {
 }  // namespace
 
 int main(int argc, const char* argv[]) {
+#if defined(_WIN32)
+  // Frames arrive on stdin as raw bytes; the CRT's default text mode would
+  // rewrite 0x0A and stop at 0x1A. COM must be initialised before any
+  // CoCreateInstance, and the DeckLink objects are free-threaded. The quiet
+  // invalid-parameter handler is for fdExists(3) — see the Platform section.
+  ::_setmode(::_fileno(stdin), _O_BINARY);
+  ::_set_invalid_parameter_handler([](const wchar_t*, const wchar_t*, const wchar_t*, unsigned, uintptr_t) {});
+  ::CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+#endif
   if (argc < 2) { usage(); return 2; }
   const std::string cmd = argv[1];
 
@@ -951,7 +1120,7 @@ int main(int argc, const char* argv[]) {
     }
     if (device < 0 || mode.size() != 4) { usage(); return 2; }
     // fd 3 is the control channel if the parent opened one.
-    const int controlFd = (fcntl(3, F_GETFD) != -1) ? 3 : -1;
+    const int controlFd = fdExists(3) ? 3 : -1;
     return play(device, mode, controlFd);
   }
 

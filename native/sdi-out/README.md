@@ -158,9 +158,24 @@ in the installers. `MAIDENPLAYER_SDI_OUT` overrides the path for testing;
 pointing it at `stub/sdi-out` fakes a device so the whole player-side pipeline
 can be exercised without a card.
 
-**Windows is not built yet.** The Windows SDK is `.idl` files that need `midl`
-from the Visual Studio build tools to generate the headers; that is a
-follow-up.
+**Windows builds from the same source.** The DeckLink API is a registered COM
+server there — `DeckLinkAPI64.dll`, installed by Desktop Video — reached
+through the header `midl` generates from Blackmagic's `.idl` files, which are
+also committed, under `sdk/Win`. Everything platform-specific is in the
+"Platform" section of `sdi-out.cpp`: how the API is reached, `BSTR` vs
+`CFStringRef`, `BOOL` vs `bool` out-parameters, and how the child sees fd 3
+(libuv hands the handle table over in `STARTUPINFO`; the CRT reads it, so the
+same fd numbers work). From an **x64 Native Tools Command Prompt**, or any
+shell with `cl` and `midl` on the path:
+
+```
+bash scripts/build-sdi-out-win.sh     # -> src/bin/sdi-out.exe, x64, static CRT
+```
+
+CI does this on the Windows job — `vswhere` finds Visual Studio, `vcvars64`
+sets up its environment — then checks the `.exe` is inside the package and
+runs it from there. On Windows the diagnostics say `com-server registered
+<dll>` / `not-registered` where macOS says `framework present` / `missing`.
 
 ## When it says "No Blackmagic device found"
 
@@ -185,6 +200,7 @@ Reading the `diag:` lines:
 
 | Line | Means |
 |---|---|
+| `framework present` / `missing` (macOS), `com-server registered <dll>` / `not-registered` (Windows) | Whether Desktop Video's API is on the machine at all, found without loading it. Missing / not registered means Desktop Video is not installed. |
 | `helper-sdk 16.0` | The SDK this binary was compiled with. |
 | `desktop-video-api 14.5` | The driver actually installed. |
 | `driver-generation current` | Same generation; nothing special. |
