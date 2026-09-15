@@ -137,6 +137,34 @@
         </div>
       </div>
 
+      <!-- Paste Clip dialog: a range copied in another window (or this one)
+           goes into this movie by Insert or Overwrite, saved as a new file -->
+      <div id="paste-dialog" class="hidden">
+        <div class="seq-dialog-box export-box">
+          <h3>Paste Clip</h3>
+          <div class="info-grid paste-grid">
+            <span class="info-label">Clip</span><span id="paste-clip" class="info-value">—</span>
+            <span class="info-label">Into</span><span id="paste-dest" class="info-value">—</span>
+            <span class="info-label">At</span><span id="paste-at" class="info-value">—</span>
+          </div>
+          <div class="paste-modes">
+            <label class="paste-mode"><input type="radio" name="paste-mode" value="insert" checked>
+              <span><b>Insert</b><br>Cuts the movie at the paste point and shuffles everything after it down to make room. The movie gets longer by the clip's length.</span></label>
+            <label class="paste-mode"><input type="radio" name="paste-mode" value="overwrite">
+              <span><b>Overwrite</b><br>Lays the clip on top from the paste point. Nothing shuffles; the movie stays the same length unless the clip runs past the end.</span></label>
+          </div>
+          <div class="form-row">
+            <label for="paste-format">Format</label>
+            <select id="paste-format"></select>
+          </div>
+          <div id="paste-note" class="dialog-note">—</div>
+          <div class="seq-dialog-buttons">
+            <button id="paste-btn-cancel" class="seq-btn seq-btn-secondary">Cancel</button>
+            <button id="paste-btn-save" class="seq-btn seq-btn-primary">Save As…</button>
+          </div>
+        </div>
+      </div>
+
       <!-- Mute Channels dialog -->
       <div id="mute-dialog" class="hidden">
         <div class="seq-dialog-box export-box">
@@ -467,6 +495,7 @@
         <div class="shortcut-row"><kbd>Shift+I</kbd> / <kbd>Shift+O</kbd><span>Go to In / Out</span></div>
         <div class="shortcut-row"><kbd>⌘⇧X</kbd><span>Clear In and Out</span></div>
         <div class="shortcut-row"><kbd>⌘E</kbd><span>Export… (whole movie or In → Out)</span></div>
+        <div class="shortcut-row"><kbd>⌘C</kbd> / <kbd>⌘V</kbd><span>Copy In → Out as a clip; paste it into the movie in another window (Insert or Overwrite)</span></div>
         <div class="shortcut-row"><kbd>⌘B</kbd><span>Copy selection to the clip bin</span></div>
         <div class="shortcut-row"><kbd>⌘⇧B</kbd><span>Combine Movies panel</span></div>
         <div class="shortcut-row"><kbd>⌘⇧S</kbd><span>Save current frame as a still</span></div>

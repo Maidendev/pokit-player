@@ -108,6 +108,13 @@ corner toast while playback continues; **Show in Folder** / **Open** when it lan
   keyframes, so the dialog **shows where the lossless cut will actually land** (e.g.
   `In 00:00:04:04 (−1 fr), Out 00:00:09:20 (+3 fr)`) and offers a frame-accurate encode
   instead. The source timecode is carried into the new file, offset to the cut.
+- **Copy and paste between windows** — with an In → Out selection, `⌘C` puts the clip
+  on the system clipboard, so it travels to a second MaidenPlayer window. `⌘V` there
+  asks **Insert** (cut at the paste point and shuffle the rest down) or **Overwrite**
+  (lay the clip on top, no shuffle) and saves a new movie. The paste lands at the In
+  point if one is set, otherwise at the playhead. Lossless when the two movies match;
+  otherwise conformed to the destination and encoded. In a text field `⌘C` / `⌘V`
+  copy and paste text as usual.
 - **Export…** (`⌘E`) — whole movie or In → Out; Lossless, Apple ProRes 422 HQ / 422 /
   4444, Avid DNxHR HQ / HQX, or H.264. Optionally **bake in the active LUT**.
 - **Append / Combine Movies** (`⌘⇧B`) — an ordered list of movies and clip-bin
@@ -166,6 +173,8 @@ Mask and LUT settings persist between launches and are mirrored in the View menu
 | `Shift+I` / `Shift+O` | Go to In / Out |
 | `⌘⇧X` / `Ctrl+Shift+X` | Clear In and Out |
 | `⌘E` / `Ctrl+E` | Export… (whole movie or In → Out) |
+| `⌘C` / `Ctrl+C` | Copy In → Out as a clip (to the clipboard, for any window) |
+| `⌘V` / `Ctrl+V` | Paste clip into this movie: Insert or Overwrite |
 | `⌘B` / `Ctrl+B` | Copy selection to the clip bin |
 | `⌘⇧B` / `Ctrl+Shift+B` | Combine Movies panel |
 | `⌘⇧S` / `Ctrl+Shift+S` | Save current frame as a still |

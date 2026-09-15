@@ -3979,11 +3979,166 @@
   window.electronAPI.onLookState((state) => { applyLookState(state); });
   window.electronAPI.lookGet().then((state) => applyLookState(state)).catch(() => {});
 
+  // ─── Copy / Paste a clip between windows ───────────────────────────────
+  //
+  // ⌘C with an In→Out selection puts a clip reference on the SYSTEM
+  // clipboard — a second MaidenPlayer window is a separate process, and the
+  // clipboard is the one thing both can reach. ⌘V in the destination window
+  // offers Insert (cut at the paste point, shuffle the rest down) or
+  // Overwrite (lay the clip on top, no shuffle), then saves a new file. Both
+  // are just segment lists handed to the same combine engine, so they are
+  // lossless whenever the two movies are compatible.
+
+  const CLIP_PREFIX = 'MAIDENPLAYER-CLIP:';
+  const pasteDialog = document.getElementById('paste-dialog');
+  const pasteClipEl = document.getElementById('paste-clip');
+  const pasteDestEl = document.getElementById('paste-dest');
+  const pasteAtEl = document.getElementById('paste-at');
+  const pasteFormatSel = document.getElementById('paste-format');
+  const pasteNote = document.getElementById('paste-note');
+  let pendingPaste = null;      // { clip, at, checks: { insert, overwrite } }
+
+  function pasteMode() {
+    const r = pasteDialog.querySelector('input[name="paste-mode"]:checked');
+    return r ? r.value : 'insert';
+  }
+
+  async function copyClipToClipboard() {
+    if (isTypingTarget(document.activeElement)) { window.electronAPI.webCopy(); return; }
+    const source = currentEditSource();
+    if (!source) return;
+    if (!hasSelection()) { alert('Set an In and/or Out point first (I and O), then copy.'); return; }
+    const r = selectionRange();
+    const outT = outPoint !== null ? r.outTime : mediaDuration();
+    const clip = {
+      type: 'maidenplayer-clip',
+      version: 1,
+      source,
+      inTime: r.inTime,
+      outTime: outT,
+      fps: frameRate,
+      label: entryLabel(source),
+      inTc: tcOf(r.inTime),
+      outTc: tcOf(outT),
+    };
+    await window.electronAPI.clipboardWriteText(CLIP_PREFIX + JSON.stringify(clip));
+    showJobDone('Copied ' + clip.label + '  ' + clip.inTc + ' → ' + clip.outTc + '. Paste it into another movie with ⌘V.', null, false);
+  }
+
+  async function readClipFromClipboard() {
+    const text = await window.electronAPI.clipboardReadText();
+    if (!text || !text.startsWith(CLIP_PREFIX)) return null;
+    try {
+      const clip = JSON.parse(text.slice(CLIP_PREFIX.length));
+      if (clip && clip.type === 'maidenplayer-clip' && clip.source && typeof clip.inTime === 'number') return clip;
+    } catch (_) { /* not ours */ }
+    return null;
+  }
+
+  /** Segment lists for the two paste modes. Every entry is { source, inTime?, outTime? }. */
+  function pasteEntries(clip, dest, at, mode, destDuration) {
+    const clipLen = Math.max(0, clip.outTime - clip.inTime);
+    const entries = [];
+    if (at > 0) entries.push({ source: dest, inTime: 0, outTime: at });
+    entries.push({ source: clip.source, inTime: clip.inTime, outTime: clip.outTime });
+    const resume = mode === 'overwrite' ? at + clipLen : at;
+    if (resume < destDuration - 0.001) entries.push({ source: dest, inTime: resume, outTime: undefined });
+    return entries;
+  }
+
+  async function pasteClip() {
+    if (isTypingTarget(document.activeElement)) { window.electronAPI.webPaste(); return; }
+    const dest = currentEditSource();
+    if (!dest) return;
+    const clip = await readClipFromClipboard();
+    if (!clip) {
+      alert('The clipboard has no MaidenPlayer clip.\n\nIn the source window set In and Out (I and O) and press ⌘C / Ctrl+C, then paste here.');
+      return;
+    }
+    await ensureEditPresets();
+    const destDesc = await ensureEditDesc();
+    const destDuration = (destDesc && destDesc.duration) || mediaDuration();
+    // Paste at the In point if one is set, otherwise at the playhead.
+    const at = Math.min(destDuration, inPoint !== null ? inPoint : snapToFrame(video.currentTime));
+
+    pasteClipEl.textContent = clip.label + '  ' + clip.inTc + ' → ' + clip.outTc +
+      '  (' + secondsToTimecode(clip.outTime - clip.inTime, clip.fps || frameRate) + ')';
+    pasteDestEl.textContent = entryLabel(dest);
+    pasteAtEl.textContent = tcOf(at) + (inPoint !== null ? '  (In point)' : '  (playhead)');
+    pasteNote.textContent = 'Checking whether the two movies can be joined losslessly…';
+    pasteNote.className = 'dialog-note';
+    pasteFormatSel.innerHTML = '';
+    pendingPaste = { clip, at, dest, destDuration, check: null };
+    pasteDialog.classList.remove('hidden');
+
+    // Compatibility is a property of the two movies, not of the mode, so one
+    // check covers both Insert and Overwrite.
+    const entries = pasteEntries(clip, dest, at, 'insert', destDuration);
+    const check = await window.electronAPI.editCheckCombine(entries);
+    if (!pendingPaste || pendingPaste.clip !== clip) return;   // dialog was closed
+    if (!check || check.error) {
+      pasteNote.textContent = 'Could not read one of the movies: ' + (check && check.error);
+      pasteNote.className = 'dialog-note error';
+      return;
+    }
+    pendingPaste.check = check;
+    populateFormatSelect(pasteFormatSel, { intraOnly: check.intraOnly }, check.lossless);
+    pasteFormatSel.value = check.lossless ? 'copy' : 'prores_422hq';
+    updatePasteNote();
+  }
+
+  function updatePasteNote() {
+    if (!pendingPaste || !pendingPaste.check) return;
+    const check = pendingPaste.check;
+    const fmt = pasteFormatSel.value;
+    if (fmt !== 'copy') {
+      pasteNote.textContent = 'Both movies are re-encoded to ' + pasteFormatSel.selectedOptions[0].textContent +
+        ' and conformed to this movie\'s raster and rate. Frame accurate.';
+      pasteNote.className = 'dialog-note';
+      return;
+    }
+    if (check.lossless) {
+      pasteNote.textContent = 'The movies match — a lossless splice, no re-encode.' +
+        (check.notes && check.notes.length ? ' Long-GOP: the paste point and clip bounds snap to keyframes.' : '');
+      pasteNote.className = 'dialog-note ok';
+    } else {
+      pasteNote.textContent = 'A lossless splice is not possible: ' + check.reasons.slice(0, 3).join('; ') + '. Choose an encode format.';
+      pasteNote.className = 'dialog-note warn';
+    }
+  }
+  pasteFormatSel.addEventListener('change', updatePasteNote);
+  document.getElementById('paste-btn-cancel').addEventListener('click', () => { pasteDialog.classList.add('hidden'); pendingPaste = null; });
+
+  document.getElementById('paste-btn-save').addEventListener('click', async () => {
+    if (!pendingPaste || !pendingPaste.check) return;
+    const { clip, at, dest, destDuration } = pendingPaste;
+    const mode = pasteMode();
+    const fmt = pasteFormatSel.value;
+    const preset = fmt === 'copy' ? null : editPresets.encode.find((p) => p.key === fmt);
+    const srcExt = (editDesc && editDesc.ext) || '.mov';
+    const ext = preset ? preset.ext : (['.mov', '.mp4', '.m4v', '.mkv'].includes(srcExt) ? srcExt : '.mov');
+    const out = await window.electronAPI.showSaveDialog({
+      title: (mode === 'insert' ? 'Insert' : 'Overwrite') + ' Clip — save as',
+      defaultPath: defaultOutput('_' + mode + '_' + tcForName(at), ext),
+      filters: [{ name: 'QuickTime Movie', extensions: ['mov'] }, { name: 'MP4', extensions: ['mp4'] }, { name: 'MXF', extensions: ['mxf'] }, { name: 'Matroska', extensions: ['mkv'] }]
+        .sort((a, b) => ('.' + a.extensions[0] === ext ? -1 : 0) - ('.' + b.extensions[0] === ext ? -1 : 0)),
+    });
+    if (!out) return;
+    pasteDialog.classList.add('hidden');
+    pendingPaste = null;
+    const entries = pasteEntries(clip, dest, at, mode, destDuration);
+    await runEditJob('combine', {
+      entries, output: out, mode: fmt === 'copy' ? 'copy' : 'encode', preset: preset ? preset.key : undefined,
+    }, (mode === 'insert' ? 'Inserting ' : 'Overwriting with ') + clip.label + ' at ' + tcOf(at) + '…');
+  });
+
   // ─── Commands from the menus ───────────────────────────────────────────
 
   function closeEditingUi() {
     exportDialog.classList.add('hidden');
     muteDialog.classList.add('hidden');
+    pasteDialog.classList.add('hidden');
+    pendingPaste = null;
     markersPanel.classList.add('hidden');
     combinePanel.classList.add('hidden');
     lookPanel.classList.add('hidden');
@@ -4000,6 +4155,8 @@
       case 'export': openExportDialog(payload || {}); break;
       case 'delete-selection': deleteSelection(); break;
       case 'copy-selection': copySelectionToBin(); break;
+      case 'copy': copyClipToClipboard(); break;
+      case 'paste': pasteClip(); break;
       case 'append-movie': appendMovie(); break;
       case 'toggle-combine-panel': togglePanel(combinePanel); break;
       case 'save-frame': saveCurrentFrame(); break;

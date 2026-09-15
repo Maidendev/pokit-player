@@ -265,6 +265,7 @@ nobody has asked for it and a masked projector picture is usually the wrong thin
 | Simple In/Out editing — trim, delete, copy, export | `I` / `O`, edit bar, Trim / Delete / To Bin / Export; lossless or encode |
 | Marker set on `M` | Markers at source TC on the scrubber; panel, names, persist per file, CSV/TXT/JSON export |
 | Append / combine movies | Combine panel with reorder, clip bin (`⌘B`), lossless-join check with reasons; Append Movie… |
+| Copy / paste a range between windows | `⌘C` puts the In→Out clip on the system clipboard; `⌘V` in another window inserts or overwrites at the In point / playhead, saved as a new movie |
 | Save current frame | PNG / JPEG / TIFF / DPX / EXR from the source, bit depth follows the source, LUT baked when on |
 | Extract / replace / add / mute audio | WAV / AIFF / original codec; remove; replace; add track; per-channel mute with speaker labels |
 | Lossless where possible | Stream copy by default; long-GOP keyframe snap shown before writing; source TC carried into the cut |

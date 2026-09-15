@@ -442,8 +442,13 @@ function buildMenu() {
         { role: 'redo' },
         { type: 'separator' },
         { role: 'cut' },
-        { role: 'copy' },
-        { role: 'paste' },
+        // Copy / Paste are ours, not roles: with an In→Out selection and no
+        // text field focused, Copy puts the clip on the clipboard and Paste
+        // offers Insert / Overwrite into the movie in THIS window — the
+        // QuickTime 7 Pro move, across windows. In a text field the renderer
+        // falls back to ordinary text copy/paste.
+        { label: 'Copy', accelerator: 'CmdOrCtrl+C', click: () => sendEdit('copy') },
+        { label: 'Paste', accelerator: 'CmdOrCtrl+V', click: () => sendEdit('paste') },
         { role: 'selectAll' },
         { type: 'separator' },
         // ── In / Out selection (I and O, as in every NLE)
@@ -1142,6 +1147,14 @@ ipcMain.handle('read-text-file', async (_event, filePath) => {
 });
 
 ipcMain.handle('reveal-in-folder', async (_event, filePath) => { shell.showItemInFolder(filePath); return true; });
+
+// Clip clipboard (see preload). The system clipboard is what lets a range
+// copied in one MaidenPlayer window be pasted into another — they are
+// separate processes with nothing else in common.
+ipcMain.handle('clipboard-write-text', async (_event, text) => { require('electron').clipboard.writeText(String(text)); return true; });
+ipcMain.handle('clipboard-read-text', async () => require('electron').clipboard.readText());
+ipcMain.handle('web-copy', async (event) => { event.sender.copy(); return true; });
+ipcMain.handle('web-paste', async (event) => { event.sender.paste(); return true; });
 
 // ─── Look & framing IPC ──────────────────────────────────────────────────────
 

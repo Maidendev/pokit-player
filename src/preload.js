@@ -93,6 +93,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   readTextFile: (filePath) => ipcRenderer.invoke('read-text-file', filePath),
   revealInFolder: (filePath) => ipcRenderer.invoke('reveal-in-folder', filePath),
 
+  // Clip clipboard: a copied In→Out range travels between windows (separate
+  // app processes) on the system clipboard. webCopy/webPaste fall through to
+  // ordinary text copy/paste when a text field has focus.
+  clipboardWriteText: (text) => ipcRenderer.invoke('clipboard-write-text', text),
+  clipboardReadText: () => ipcRenderer.invoke('clipboard-read-text'),
+  webCopy: () => ipcRenderer.invoke('web-copy'),
+  webPaste: () => ipcRenderer.invoke('web-paste'),
+
   // Look & framing: LUT and aspect-ratio masks. State is owned by main.
   lookGet: () => ipcRenderer.invoke('look-get'),
   lookUpdate: (partial) => ipcRenderer.invoke('look-update', partial),
