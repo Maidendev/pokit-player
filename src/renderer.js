@@ -1237,6 +1237,10 @@
 
   function hideControls() {
     if (isTimelineDragging) return;
+    // Paused means the operator is looking at a frame, and the transport
+    // stays up for that — whichever timer happened to fire. Reverse shuttle
+    // drives a paused <video>, so it still counts as playing here.
+    if (video.paused && shuttleDirection === 0) return;
     controlsBar.classList.remove('visible');
     controlsBar.classList.add('hidden');
     // Fades the meter HUD out alongside the transport rather than hiding it,
@@ -1257,6 +1261,11 @@
   controlsBar.addEventListener('mouseenter', () => clearTimeout(controlsTimeout));
   controlsBar.addEventListener('mouseleave', () => {
     if (!video.paused && hasVideoLoaded) {
+      // Leaving the window through the bar fires this AND the container's
+      // mouseleave. Without the clear, the first timer was orphaned — the
+      // pause handler could only cancel the second — and the controls
+      // vanished 1.5 s after pausing.
+      clearTimeout(controlsTimeout);
       controlsTimeout = setTimeout(hideControls, 2000);
     }
   });

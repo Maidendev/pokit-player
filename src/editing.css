@@ -9,9 +9,9 @@
   position: absolute;
   top: -3px;
   bottom: -3px;
-  background: rgba(230, 18, 197, 0.22);
-  border-top: 1px solid rgba(230, 18, 197, 0.6);
-  border-bottom: 1px solid rgba(230, 18, 197, 0.6);
+  background: rgba(128, 50, 212, 0.28);
+  border-top: 1px solid rgba(128, 50, 212, 0.7);
+  border-bottom: 1px solid rgba(128, 50, 212, 0.7);
   pointer-events: none;
 }
 
@@ -361,7 +361,7 @@
   font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
 }
 .mask-preset:hover { color: var(--text-primary); border-color: rgba(255, 255, 255, 0.3); }
-.mask-preset.active { background: var(--accent); color: #000; border-color: var(--accent); font-weight: 600; }
+.mask-preset.active { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600; }
 #mask-custom { max-width: 90px; flex: 0 1 auto; }
 
 /* LUT canvas replaces the <video> on screen while a LUT is on; the mask canvas
