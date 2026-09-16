@@ -124,6 +124,8 @@
   let streamSeekTime = 0;           // The -ss time passed to ffmpeg
   let streamEnded = false;          // ffmpeg finished sending data
   let firstDataReceived = false;    // Track when first chunk arrives
+  let streamStartPending = false;   // a (re)started stream has not yet delivered a playable fragment
+  let streamResumeOnStart = false;  // ...and playback should resume once it does
   let mseReady = false;             // MediaSource is open and SourceBuffer created
   const MSE_CODEC = 'video/mp4; codecs="avc1.640029,mp4a.40.2"'; // H.264 High 4.1 + AAC-LC
   const MSE_CODEC_VIDEO_ONLY = 'video/mp4; codecs="avc1.640029"'; // H.264 High 4.1 (no audio)
@@ -299,6 +301,8 @@
     video.loop = loopEnabled;
     mseReady = false;
     firstDataReceived = false;
+    streamStartPending = false;
+    streamResumeOnStart = false;
     streamEnded = false;
     pendingBuffers = [];
     isAppending = false;
@@ -350,6 +354,9 @@
     streamSeekTime = seekTime;
     streamEnded = false;
     firstDataReceived = false;
+    // Opening a file starts playback as soon as the first fragment lands.
+    streamStartPending = true;
+    streamResumeOnStart = true;
 
     // Determine codec string based on whether file has audio
     const hasAudio = !!(probeInfo.audioCodec);
@@ -407,13 +414,7 @@
       isAppending = false;
       flushPendingBuffers();
       updateStreamBackpressure();
-
-      // Auto-play after first successful append
-      if (firstDataReceived && video.paused && video.readyState >= 2) {
-        console.log('[Renderer] Auto-playing after first buffer');
-        video.play().catch(() => {});
-        hideTranscodeOverlay();
-      }
+      onStreamFragmentAppended();
     });
 
     // Handle errors on SourceBuffer
@@ -443,6 +444,28 @@
 
     console.log('[Renderer] Stream started successfully');
     return true;
+  }
+
+  /**
+   * The first playable fragment after a stream (re)start has landed: drop the
+   * overlay and, if the transport was running, get going again.
+   *
+   * This fires exactly once per start. It used to call play() on EVERY append
+   * that found the <video> paused, so while ffmpeg was still streaming a large
+   * ProRes 4444 XQ file every 0.5 s fragment un-paused the player again, and
+   * pause only "took" once the whole file had been decoded.
+   */
+  function onStreamFragmentAppended() {
+    if (!streamStartPending || !firstDataReceived) return;
+    // readyState climbs only once data covering the playhead has been appended.
+    if (video.readyState < 2) return;
+    streamStartPending = false;
+    hideTranscodeOverlay();
+    if (streamResumeOnStart) {
+      streamResumeOnStart = false;
+      console.log('[Renderer] Stream (re)started — resuming playback');
+      video.play().catch(() => {});
+    }
   }
 
   /**
@@ -519,9 +542,10 @@
     if (isAppending || pendingBuffers.length === 0) return;
     if (!sourceBuffer || !mseReady) return;
 
-    // Check if MediaSource is still open
-    if (mediaSource.readyState !== 'open') {
-      console.warn('[Renderer] MediaSource not open, dropping pending buffers');
+    // 'ended' is fine: appending reopens the MediaSource. That is exactly the
+    // state after a fully-streamed file when a seek lands in an evicted range.
+    if (mediaSource.readyState === 'closed') {
+      console.warn('[Renderer] MediaSource closed, dropping pending buffers');
       pendingBuffers = [];
       return;
     }
@@ -638,6 +662,10 @@
     console.log('[Renderer] Seeking outside buffer — restarting stream at:', time);
     showTranscodeOverlay('Seeking…', '');
 
+    // A seek must not change the transport state: resume only if the operator
+    // was playing. Reverse shuttle drives a paused <video>, so it stays put.
+    const wasPlaying = !video.paused && !video.ended;
+
     // Stop current stream
     await window.electronAPI.stopStream();
 
@@ -645,6 +673,8 @@
     streamSeekTime = time;
     streamEnded = false;
     firstDataReceived = false;
+    streamStartPending = true;
+    streamResumeOnStart = wasPlaying;
     pendingBuffers = [];
     // The old decoder is gone; the replacement starts unthrottled, so clear
     // the flag or we would never ask the new one to resume.
@@ -657,10 +687,11 @@
       });
     }
 
-    // Clear existing buffer
-    if (sourceBuffer && mediaSource && mediaSource.readyState === 'open') {
+    // Clear existing buffer. remove() and timestampOffset also work on an
+    // 'ended' MediaSource (they reopen it); only abort() insists on 'open'.
+    if (sourceBuffer && mediaSource && mediaSource.readyState !== 'closed') {
       try {
-        sourceBuffer.abort();
+        if (mediaSource.readyState === 'open') sourceBuffer.abort();
         if (sourceBuffer.buffered.length > 0) {
           sourceBuffer.remove(0, Infinity);
           await new Promise(resolve => {
@@ -673,6 +704,13 @@
         console.warn('[Renderer] Buffer clear error:', e.message);
       }
     }
+
+    // Move the playhead now. The element seeks into the gap and the seek
+    // completes by itself once the first fragment covering the seek time is appended.
+    // Without this the playhead stayed at the OLD position, which the new
+    // stream never covers, so the picture froze until ffmpeg finished and
+    // endOfStream() then threw it to the end of the clip.
+    video.currentTime = time;
 
     // Start new stream at seek position
     const result = await window.electronAPI.startStream(originalFilePath, time);
@@ -1436,6 +1474,7 @@
   video.addEventListener('volumechange', updateVolumeIcon);
   video.addEventListener('canplay', () => {
     console.log('[Renderer] Video can play');
+    onStreamFragmentAppended();   // readyState can lag the append's updateend
   });
 
   // ─── Drag & Drop ──────────────────────────────────────
