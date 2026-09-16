@@ -652,6 +652,15 @@ function buildMenu() {
           label: 'Check for Updates…',
           click: () => checkForUpdates(true),
         },
+        {
+          label: 'Show Update Log…',
+          click: () => {
+            const file = updaterLogFile();
+            if (!file) return;
+            if (fs.existsSync(file)) shell.showItemInFolder(file);
+            else shell.openPath(path.dirname(file));
+          },
+        },
         { type: 'separator' },
         {
           label: 'About',
@@ -1205,11 +1214,72 @@ ipcMain.handle('set-window-size', (_event, width, height) => {
 autoUpdater.autoDownload = true;
 autoUpdater.autoInstallOnAppQuit = true;
 
+// Every step the updater takes goes to a file as well as the console. A
+// packaged app has no console, so when an install fails after the restart
+// this file is the only record of why. Help → Show Update Log… opens it.
+//   macOS    ~/Library/Logs/MaidenPlayer/updater.log
+//   Windows  %APPDATA%\MaidenPlayer\logs\updater.log
+let updaterLogPath = null;
+function updaterLogFile() {
+  if (updaterLogPath) return updaterLogPath;
+  try {
+    const dir = app.getPath('logs');
+    fs.mkdirSync(dir, { recursive: true });
+    updaterLogPath = path.join(dir, 'updater.log');
+  } catch (_) {
+    updaterLogPath = null;
+  }
+  return updaterLogPath;
+}
+function updaterLog(level, args) {
+  const text = args.map((a) => {
+    if (a instanceof Error) return a.stack || a.message;
+    return typeof a === 'string' ? a : JSON.stringify(a);
+  }).join(' ');
+  (level === 'error' ? console.error : level === 'warn' ? console.warn : console.log)('[Updater] ' + text);
+  const file = updaterLogFile();
+  if (!file) return;
+  try {
+    // Bounded: start over once it passes about 1 MB.
+    try { if (fs.statSync(file).size > 1024 * 1024) fs.unlinkSync(file); } catch (_) { /* no file yet */ }
+    fs.appendFileSync(file, new Date().toISOString() + ' [' + level + '] ' + text + '\n');
+  } catch (_) { /* logging must never take the app down */ }
+}
+autoUpdater.logger = {
+  info: (...a) => updaterLog('info', a),
+  warn: (...a) => updaterLog('warn', a),
+  error: (...a) => updaterLog('error', a),
+  debug: (...a) => updaterLog('debug', a),
+};
+
+// Where the updater is in its cycle. On macOS 'update-downloaded' fires when
+// electron-updater has the .zip, BEFORE Squirrel has fetched and verified it
+// — so a Squirrel failure arrives as an 'error' after the operator was told
+// the update was ready, and the app then simply comes back at the old
+// version. That case must never be silent.
+let updateStage = 'idle';   // idle | checking | downloading | downloaded | installing
+
 autoUpdater.on('error', (err) => {
-  console.error('[Updater] error:', err.message);
+  updaterLog('error', ['error at stage ' + updateStage + ':', err]);
+  const failedInstall = updateStage === 'downloaded' || updateStage === 'installing';
+  updateStage = 'idle';
+  // Failures of the check itself are reported by checkForUpdates(); only the
+  // post-download failure is reported here, so nothing raises two dialogs.
+  if (!failedInstall || !mainWindow) return;
+  dialog.showMessageBox(mainWindow, {
+    type: 'error',
+    title: 'Update Could Not Be Installed',
+    message: 'The update was downloaded but could not be installed.',
+    detail: updateErrorDetail(err) + '\n\nThe full record is in the update log (Help → Show Update Log…).',
+    buttons: ['OK'],
+  });
 });
+autoUpdater.on('checking-for-update', () => { updateStage = 'checking'; });
+autoUpdater.on('download-progress', () => { updateStage = 'downloading'; });
 
 autoUpdater.on('update-downloaded', (info) => {
+  updateStage = 'downloaded';
+  updaterLog('info', ['update ' + (info && info.version) + ' downloaded; running ' + app.getVersion() + ' from ' + app.getPath('exe')]);
   if (!mainWindow) return;
   dialog
     .showMessageBox(mainWindow, {
@@ -1222,9 +1292,37 @@ autoUpdater.on('update-downloaded', (info) => {
       cancelId: 1,
     })
     .then(({ response }) => {
-      if (response === 0) autoUpdater.quitAndInstall();
+      if (response !== 0) return;
+      updateStage = 'installing';
+      updaterLog('info', ['operator chose Restart Now — quitAndInstall']);
+      autoUpdater.quitAndInstall();
     });
 });
+
+/**
+ * On macOS the update is applied by Squirrel replacing the .app bundle in
+ * place. That cannot work when the bundle is not replaceable, and Squirrel
+ * fails quietly when it is not — the app just relaunches at the old version.
+ * Both ways of getting there are detectable before offering an update at all.
+ */
+function updateBlockedReason() {
+  if (process.platform !== 'darwin' || !app.isPackaged) return null;
+  const exe = app.getPath('exe');                       // …/MaidenPlayer.app/Contents/MacOS/MaidenPlayer
+  const bundle = path.resolve(exe, '..', '..', '..');   // …/MaidenPlayer.app
+  if (exe.includes('/AppTranslocation/')) {
+    return 'macOS is running MaidenPlayer from a temporary read-only location because it was '
+      + 'opened straight from the download (App Translocation). Quit, drag MaidenPlayer.app '
+      + 'into the Applications folder with the Finder, and open it from there.';
+  }
+  try {
+    fs.accessSync(bundle, fs.constants.W_OK);
+    fs.accessSync(path.dirname(bundle), fs.constants.W_OK);
+  } catch (_) {
+    return bundle + ' cannot be replaced by this user account, so an update could not be '
+      + 'installed. Move MaidenPlayer.app into your Applications folder, or reinstall it from the DMG.';
+  }
+  return null;
+}
 
 // Set while a user-initiated check is in flight. The automatic check on launch
 // must stay silent, but a check the user asked for has to report an outcome —
@@ -1285,11 +1383,28 @@ function updateErrorDetail(err) {
 function checkForUpdates(isManual) {
   manualUpdateCheck = !!isManual;
 
+  const blocked = updateBlockedReason();
+  if (blocked) {
+    updaterLog('warn', ['not checking — ' + blocked]);
+    if (isManual && mainWindow) {
+      manualUpdateCheck = false;
+      dialog.showMessageBox(mainWindow, {
+        type: 'warning',
+        title: 'Updates Cannot Be Installed From Here',
+        message: 'MaidenPlayer cannot update itself from its current location.',
+        detail: blocked,
+        buttons: ['OK'],
+      });
+    }
+    return;
+  }
+  updaterLog('info', [(isManual ? 'manual' : 'automatic') + ' check; running ' + app.getVersion() + ' from ' + app.getPath('exe')]);
+
   // electron-updater rejects on unsigned/unpackaged (dev) runs — don't let an
   // update check crash the app. It also emits 'error'; the dialog lives here
   // rather than in that handler so a failure cannot raise two dialogs.
   autoUpdater.checkForUpdates().catch((err) => {
-    console.error('[Updater] check failed:', err.message);
+    updaterLog('error', ['check failed:', err]);
     if (manualUpdateCheck && mainWindow) {
       manualUpdateCheck = false;
       dialog.showMessageBox(mainWindow, {

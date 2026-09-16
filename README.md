@@ -242,6 +242,42 @@ npm run build:all
 
 Output binaries will be in the `dist/` directory.
 
+#### Code signing
+
+Release builds come from `.github/workflows/build.yml` on a `v*` tag. Whether
+they are signed depends only on which repository secrets exist.
+
+**macOS** — signed with a Developer ID Application certificate and notarized
+when `MAC_CSC_LINK`, `MAC_CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_ID_PASSWORD`
+and `APPLE_TEAM_ID` are set. The build fails if they are set and the result is
+not signed and stapled. Squirrel applies an update only by replacing the
+`.app` in place, so the updater refuses to check when the bundle is not
+replaceable (opened from the download under App Translocation, or not
+writable) and says why.
+
+**Windows** — unsigned until one of these is configured. Without a signature
+Windows shows "Unknown publisher" at the UAC prompt and SmartScreen or Smart
+App Control may block the installer outright, also when the updater runs it.
+
+| Method | Secrets | Notes |
+|---|---|---|
+| Azure Trusted Signing (recommended) | `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `AZURE_SIGN_ENDPOINT`, `AZURE_SIGN_ACCOUNT`, `AZURE_SIGN_PROFILE` | Microsoft-issued certificate tied to the verified legal entity. No key file to protect, and SmartScreen trusts it from the first release. Needs an Azure subscription and identity validation of Maiden Media Solutions INC. |
+| Certificate file (OV/EV from a CA) | `WIN_CSC_LINK` (the `.pfx`, base64), `WIN_CSC_KEY_PASSWORD` | An OV certificate still gets SmartScreen warnings until it has built reputation; an EV certificate does not, but usually lives on a hardware token or a cloud HSM, which needs the CA's own signing tool instead. |
+
+Either way the built app then verifies every downloaded installer's signature
+against `build.win.publisherName` in `package.json`, so that value must equal
+the certificate's Subject CN exactly.
+
+While Windows is unsigned, a tag build still uploads to a draft release but
+the publish job leaves it as a draft, so installed apps are never offered it.
+To publish an unsigned release on purpose, set the repository variable
+`ALLOW_UNSIGNED_RELEASE` to `true`.
+
+The updater writes everything it does to `updater.log` — Help → Show Update
+Log… opens it (`~/Library/Logs/MaidenPlayer/` on macOS,
+`%APPDATA%\MaidenPlayer\logs\` on Windows). Squirrel's own record on macOS is
+`~/Library/Caches/com.maidenplayer.app.ShipIt/ShipIt_stderr.log`.
+
 ---
 
 ### Project Structure

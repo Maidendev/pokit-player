@@ -197,6 +197,38 @@ jobs:
             echo "warns on first launch."
           fi
 
+      # The same report for Windows. Two ways to sign are supported, checked in
+      # this order, and the Build step passes whichever is present:
+      #   1. Azure Trusted Signing — a Microsoft-issued certificate with no
+      #      key file to guard and SmartScreen reputation from day one:
+      #      AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET for the
+      #      service principal, plus the signing account's AZURE_SIGN_ENDPOINT,
+      #      AZURE_SIGN_ACCOUNT and AZURE_SIGN_PROFILE.
+      #   2. A .pfx from a certificate authority, base64-encoded, as
+      #      WIN_CSC_LINK with its password in WIN_CSC_KEY_PASSWORD — the names
+      #      electron-builder reads natively for a Windows certificate.
+      # With neither, the installer is unsigned: Windows shows "Unknown
+      # publisher" at the UAC prompt and SmartScreen or Smart App Control can
+      # block it outright — including when electron-updater launches it.
+      - name: Report Windows signing configuration
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          HAS_AZURE: ${{ secrets.AZURE_TENANT_ID != '' && secrets.AZURE_CLIENT_ID != '' && secrets.AZURE_CLIENT_SECRET != '' && secrets.AZURE_SIGN_ENDPOINT != '' && secrets.AZURE_SIGN_ACCOUNT != '' && secrets.AZURE_SIGN_PROFILE != '' }}
+          HAS_PFX: ${{ secrets.WIN_CSC_LINK != '' && secrets.WIN_CSC_KEY_PASSWORD != '' }}
+        run: |
+          if [[ "$HAS_AZURE" == "true" ]]; then
+            echo "Windows code signing: ENABLED (Azure Trusted Signing)"
+            echo "WIN_SIGNING=azure" >> "$GITHUB_ENV"
+          elif [[ "$HAS_PFX" == "true" ]]; then
+            echo "Windows code signing: ENABLED (.pfx certificate)"
+            echo "WIN_SIGNING=pfx" >> "$GITHUB_ENV"
+          else
+            echo "Windows code signing: DISABLED — no AZURE_* or WIN_CSC_* secrets."
+            echo "The installer will be unsigned; Windows will warn on or block it."
+            echo "WIN_SIGNING=none" >> "$GITHUB_ENV"
+          fi
+
       # Prove EVERY signing credential is usable before building. Two reasons
       # this is a step of its own rather than trust in the build:
       #   - electron-builder's message for a bad .p12 password is buried in a
@@ -452,6 +484,36 @@ jobs:
             echo "signing with pre-installed identity: ${CSC_NAME:-<unset>}"
           fi
 
+          # Windows signing, per the report step. WIN_CSC_LINK is
+          # electron-builder's own name for a Windows certificate, so an empty
+          # value has to be unset like CSC_LINK above. Azure Trusted Signing
+          # is configured on the command line so the account details never
+          # live in package.json. Either way the built app is told to VERIFY
+          # the signature of every installer it downloads, against
+          # win.publisherName — which must therefore equal the certificate's
+          # Subject CN exactly.
+          extra=()
+          if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
+            case "${WIN_SIGNING:-none}" in
+              azure)
+                unset WIN_CSC_LINK WIN_CSC_KEY_PASSWORD
+                extra+=( "-c.win.azureSignOptions.endpoint=$AZURE_SIGN_ENDPOINT"
+                         "-c.win.azureSignOptions.codeSigningAccountName=$AZURE_SIGN_ACCOUNT"
+                         "-c.win.azureSignOptions.certificateProfileName=$AZURE_SIGN_PROFILE"
+                         "-c.win.verifyUpdateCodeSignature=true" )
+                echo "signing Windows build with Azure Trusted Signing ($AZURE_SIGN_ACCOUNT / $AZURE_SIGN_PROFILE)" ;;
+              pfx)
+                unset AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_CLIENT_SECRET
+                extra+=( "-c.win.verifyUpdateCodeSignature=true" )
+                echo "signing Windows build with the WIN_CSC_LINK certificate" ;;
+              *)
+                unset WIN_CSC_LINK WIN_CSC_KEY_PASSWORD AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_CLIENT_SECRET
+                echo "Windows build will be UNSIGNED" ;;
+            esac
+          else
+            unset WIN_CSC_LINK WIN_CSC_KEY_PASSWORD AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_CLIENT_SECRET
+          fi
+
           # Capture the build output so a failure can be reported as a workflow
           # ERROR ANNOTATION below. Annotations are readable over the public
           # API, whereas downloading Actions LOGS needs admin rights on the
@@ -460,9 +522,9 @@ jobs:
           log="$RUNNER_TEMP/electron-builder.log"
           rc=0
           if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
-            npx electron-builder ${{ matrix.platformFlag }} --publish always 2>&1 | tee "$log" || rc=${PIPESTATUS[0]}
+            npx electron-builder ${{ matrix.platformFlag }} "${extra[@]}" --publish always 2>&1 | tee "$log" || rc=${PIPESTATUS[0]}
           else
-            npx electron-builder ${{ matrix.platformFlag }} --publish never 2>&1 | tee "$log" || rc=${PIPESTATUS[0]}
+            npx electron-builder ${{ matrix.platformFlag }} "${extra[@]}" --publish never 2>&1 | tee "$log" || rc=${PIPESTATUS[0]}
           fi
 
           if [[ "$rc" != "0" ]]; then
@@ -502,6 +564,15 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Windows signing — see "Report Windows signing configuration".
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_SIGN_ENDPOINT: ${{ secrets.AZURE_SIGN_ENDPOINT }}
+          AZURE_SIGN_ACCOUNT: ${{ secrets.AZURE_SIGN_ACCOUNT }}
+          AZURE_SIGN_PROFILE: ${{ secrets.AZURE_SIGN_PROFILE }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Works around a longstanding electron-builder bug where its
           # hardlink-based file copier loses an exists-check and throws
@@ -523,6 +594,19 @@ jobs:
           echo "sdi-out.exe : $exe"
           "$exe" --list-devices
           echo "exit=$?"
+
+          # Signature. When signing was configured, an unsigned installer is a
+          # failed build, not a note in a log nobody can download.
+          for f in dist/MaidenPlayer-Setup-*.exe dist/MaidenPlayer-*.exe; do
+            [[ -f "$f" ]] || continue
+            status=$(powershell -NoProfile -Command "(Get-AuthenticodeSignature '$f').Status")
+            signer=$(powershell -NoProfile -Command "(Get-AuthenticodeSignature '$f').SignerCertificate.Subject")
+            echo "$f : $status : ${signer:-<no signer>}"
+            if [[ "${WIN_SIGNING:-none}" != "none" && "$status" != "Valid" ]]; then
+              echo "::error title=Windows installer is not signed::$f has Authenticode status '$status' although signing was configured"
+              exit 1
+            fi
+          done
 
       # Prove BOTH Mac builds exist and that each one is genuinely the arch it
       # is named for. Cross-arch mistakes here are invisible until an Intel
@@ -650,8 +734,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
+          # An unsigned Windows installer is blocked by SmartScreen / Smart App
+          # Control and shows "Unknown publisher" when the updater runs it, so
+          # it must not reach installed desktops by accident. Publishing one
+          # deliberately takes the repository variable ALLOW_UNSIGNED_RELEASE=true.
+          WIN_SIGNED: ${{ (secrets.AZURE_TENANT_ID != '' && secrets.AZURE_CLIENT_ID != '' && secrets.AZURE_CLIENT_SECRET != '') || (secrets.WIN_CSC_LINK != '' && secrets.WIN_CSC_KEY_PASSWORD != '') }}
+          ALLOW_UNSIGNED: ${{ vars.ALLOW_UNSIGNED_RELEASE }}
         run: |
           set -euo pipefail
+          if [[ "$WIN_SIGNED" != "true" && "$ALLOW_UNSIGNED" != "true" ]]; then
+            echo "::error title=release $TAG left as a draft::the Windows installer is unsigned (no AZURE_* or WIN_CSC_* secrets). Windows blocks it as 'Unknown publisher'. Add signing secrets, or set the repository variable ALLOW_UNSIGNED_RELEASE=true to publish anyway."
+            exit 1
+          fi
           assets=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
           echo "assets on $TAG:"
           echo "$assets" | sed 's/^/  /'
