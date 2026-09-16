@@ -3382,11 +3382,24 @@
       o.textContent = 'Lossless — no re-encode' + (desc && !desc.intraOnly ? ' (cuts snap to keyframes)' : ' (frame accurate)');
       sel.appendChild(o);
     }
+    // Presets arrive in codec-family order; consecutive ones that share a
+    // group become one <optgroup>, so ProRes, DNxHR and DNxHD read as families.
+    let group = null, parent = sel;
     for (const p of (editPresets ? editPresets.encode : [])) {
+      if (p.group !== group) {
+        group = p.group;
+        if (group) {
+          parent = document.createElement('optgroup');
+          parent.label = group;
+          sel.appendChild(parent);
+        } else {
+          parent = sel;
+        }
+      }
       const o = document.createElement('option');
       o.value = p.key;
       o.textContent = p.label;
-      sel.appendChild(o);
+      parent.appendChild(o);
     }
   }
 

@@ -1134,7 +1134,7 @@ ipcMain.handle('edit-check-combine', async (_event, entries) => {
 });
 
 ipcMain.handle('edit-presets', async () => ({
-  encode: Object.entries(editor.ENCODE_PRESETS).map(([key, p]) => ({ key, label: p.label, ext: p.ext })),
+  encode: Object.entries(editor.ENCODE_PRESETS).map(([key, p]) => ({ key, label: p.label, ext: p.ext, group: p.group || null })),
   stills: Object.entries(editor.STILL_FORMATS).map(([key, f]) => ({ key, label: f.label, ext: f.ext })),
 }));
 

@@ -40,41 +40,140 @@ const inspector = require('./inspector');
 // possible or not wanted. Mezzanine codecs first; H.264 for a small proxy.
 // ---------------------------------------------------------------------------
 
+// Avid DNxHD (as opposed to DNxHR) is a fixed-raster codec: 1920×1080 with a
+// fixed number of bytes per frame, so each tier's Mbps figure depends on the
+// frame rate — Avid's HQ is 175 at 23.976, 185 at 25 and 220 at 29.97, all the
+// same compression ID. ffmpeg's encoder picks that ID from `-b:v` and refuses
+// anything off the list below, so a request is always snapped to a legal rate
+// for its bit depth; the encoder then writes the tier's true rate for the fps.
+const DNXHD_1080P_RATES = {
+  yuv422p:     [36, 45, 75, 90, 115, 120, 145, 175, 185, 220, 240, 290, 365, 440],
+  yuv422p10le: [175, 185, 365, 440],   // 220 is not listed for 10-bit; 185 selects the same ID (220x at 29.97)
+};
+// Mbps by nominal frame rate for each tier at 1080p.
+const DNXHD_TIERS = {
+  lb:  { 24: 36,  25: 36,  30: 45,  50: 75,  60: 90 },
+  sq:  { 24: 115, 25: 120, 30: 145, 50: 240, 60: 290 },
+  hq:  { 24: 175, 25: 185, 30: 220, 50: 365, 60: 440 },
+  hqx: { 24: 175, 25: 185, 30: 220, 50: 365, 60: 440 },
+};
+
+/** videoForSource() for a DNxHD tier: picks the legal bit rate for the source's frame rate. */
+function dnxhdVideoArgs(tier, pixFmt) {
+  return (_video, fps) => {
+    const nominal = fps >= 55 ? 60 : fps >= 45 ? 50 : fps >= 28 ? 30 : fps >= 24.5 ? 25 : 24;
+    const want = DNXHD_TIERS[tier][nominal];
+    const legal = DNXHD_1080P_RATES[pixFmt];
+    const rate = legal.reduce((best, r) => (Math.abs(r - want) < Math.abs(best - want) ? r : best), legal[0]);
+    return ['-c:v', 'dnxhd', '-b:v', rate + 'M', '-pix_fmt', pixFmt];
+  };
+}
+
+const GROUP_PRORES = 'Apple ProRes';
+const GROUP_DNXHR = 'Avid DNxHR (any raster)';
+const GROUP_DNXHD = 'Avid DNxHD (conforms to 1920×1080)';
+const GROUP_DELIVERY = 'Delivery';
+
+// A preset gives its video args either as a fixed `video` list or through
+// `videoForSource(video, fps)` when they depend on the source. `conform`
+// scales and pads the picture to a fixed raster first. Each `group` becomes an
+// <optgroup> in the export dialogs.
 const ENCODE_PRESETS = {
   prores_422hq: {
     label: 'Apple ProRes 422 HQ',
+    group: GROUP_PRORES,
     ext: '.mov',
     video: ['-c:v', 'prores_ks', '-profile:v', '3', '-vendor', 'apl0', '-pix_fmt', 'yuv422p10le'],
     evenDims: false,
   },
   prores_422: {
     label: 'Apple ProRes 422',
+    group: GROUP_PRORES,
     ext: '.mov',
     video: ['-c:v', 'prores_ks', '-profile:v', '2', '-vendor', 'apl0', '-pix_fmt', 'yuv422p10le'],
     evenDims: false,
   },
   prores_4444: {
     label: 'Apple ProRes 4444',
+    group: GROUP_PRORES,
     ext: '.mov',
     // Pixel format is chosen per source so an alpha channel survives.
     video: ['-c:v', 'prores_ks', '-profile:v', '4', '-vendor', 'apl0'],
     pixFmtForSource: (v) => (hasAlpha(v) ? 'yuva444p10le' : 'yuv444p10le'),
     evenDims: false,
   },
-  dnxhr_hq: {
-    label: 'Avid DNxHR HQ',
+  // DNxHR is resolution independent, so it is the right choice for anything
+  // that is not 1080p — UHD masters included. A .mov here is what Avid calls
+  // an "Avid QuickTime"; pick MXF in the save dialog for an OP1a MXF instead.
+  dnxhr_444: {
+    label: 'Avid DNxHR 444 (10-bit 4:4:4)',
+    group: GROUP_DNXHR,
     ext: '.mov',
-    video: ['-c:v', 'dnxhd', '-profile:v', 'dnxhr_hq', '-pix_fmt', 'yuv422p'],
+    video: ['-c:v', 'dnxhd', '-profile:v', 'dnxhr_444', '-pix_fmt', 'yuv444p10le'],
     evenDims: true,
   },
   dnxhr_hqx: {
     label: 'Avid DNxHR HQX (10-bit)',
+    group: GROUP_DNXHR,
     ext: '.mov',
     video: ['-c:v', 'dnxhd', '-profile:v', 'dnxhr_hqx', '-pix_fmt', 'yuv422p10le'],
     evenDims: true,
   },
+  dnxhr_hq: {
+    label: 'Avid DNxHR HQ',
+    group: GROUP_DNXHR,
+    ext: '.mov',
+    video: ['-c:v', 'dnxhd', '-profile:v', 'dnxhr_hq', '-pix_fmt', 'yuv422p'],
+    evenDims: true,
+  },
+  dnxhr_sq: {
+    label: 'Avid DNxHR SQ',
+    group: GROUP_DNXHR,
+    ext: '.mov',
+    video: ['-c:v', 'dnxhd', '-profile:v', 'dnxhr_sq', '-pix_fmt', 'yuv422p'],
+    evenDims: true,
+  },
+  dnxhr_lb: {
+    label: 'Avid DNxHR LB (offline)',
+    group: GROUP_DNXHR,
+    ext: '.mov',
+    video: ['-c:v', 'dnxhd', '-profile:v', 'dnxhr_lb', '-pix_fmt', 'yuv422p'],
+    evenDims: true,
+  },
+  // Classic DNxHD for Avid projects that still expect it (and for any HD
+  // deliverable spec that names a DNxHD rate). Sources at other rasters are
+  // letterboxed/pillarboxed into 1920×1080.
+  dnxhd_hqx: {
+    label: 'Avid DNxHD 175x / 185x / 220x (10-bit)',
+    group: GROUP_DNXHD,
+    ext: '.mov',
+    videoForSource: dnxhdVideoArgs('hqx', 'yuv422p10le'),
+    conform: { width: 1920, height: 1080 },
+  },
+  dnxhd_hq: {
+    label: 'Avid DNxHD 175 / 185 / 220',
+    group: GROUP_DNXHD,
+    ext: '.mov',
+    videoForSource: dnxhdVideoArgs('hq', 'yuv422p'),
+    conform: { width: 1920, height: 1080 },
+  },
+  dnxhd_sq: {
+    label: 'Avid DNxHD 115 / 120 / 145',
+    group: GROUP_DNXHD,
+    ext: '.mov',
+    videoForSource: dnxhdVideoArgs('sq', 'yuv422p'),
+    conform: { width: 1920, height: 1080 },
+  },
+  dnxhd_lb: {
+    label: 'Avid DNxHD 36 / 45 (offline)',
+    group: GROUP_DNXHD,
+    ext: '.mov',
+    videoForSource: dnxhdVideoArgs('lb', 'yuv422p'),
+    conform: { width: 1920, height: 1080 },
+  },
   h264: {
     label: 'H.264 (high quality)',
+    group: GROUP_DELIVERY,
     ext: '.mp4',
     video: ['-c:v', 'libx264', '-preset', 'slow', '-crf', '16', '-pix_fmt', 'yuv420p'],
     evenDims: true,
@@ -454,20 +553,31 @@ function audioArgs(ext, srcCodec, opts) {
   const channels = opts.channels || 2;
   const encodeAac = ['-c:a', 'aac', '-b:a', channels > 2 ? '512k' : '320k'];
   const encodePcm = ['-c:a', 'pcm_s24le'];
+  // The MXF muxer writes 48 kHz audio and nothing else, so anything at another
+  // rate is resampled rather than copied — a 44.1 kHz copy fails at the header.
+  const encodePcmMxf = ['-c:a', 'pcm_s24le', '-ar', '48000'];
   if (opts.forceEncode || !srcCodec) {
+    if (ext === '.mxf') return encodePcmMxf;
     return (ext === '.mp4' || ext === '.m4v') ? encodeAac : encodePcm;
   }
   if (ext === '.mp4' || ext === '.m4v') return MP4_AUDIO.includes(srcCodec) ? ['-c:a', 'copy'] : encodeAac;
   if (ext === '.mov') return (isPcm(srcCodec) || MOV_AUDIO.includes(srcCodec)) ? ['-c:a', 'copy'] : encodePcm;
-  if (ext === '.mxf') return isPcm(srcCodec) ? ['-c:a', 'copy'] : encodePcm;
+  if (ext === '.mxf') {
+    const is48k = !opts.sampleRate || opts.sampleRate === 48000;
+    return (isPcm(srcCodec) && is48k) ? ['-c:a', 'copy'] : encodePcmMxf;
+  }
   if (ext === '.wav' || ext === '.aif' || ext === '.aiff') return isPcm(srcCodec) ? ['-c:a', 'copy'] : encodePcm;
   if (ext === '.mka' || ext === '.mkv') return ['-c:a', 'copy'];
   return ['-c:a', 'copy'];
 }
 
-function containerArgs(ext) {
+function containerArgs(ext, desc) {
   const args = [];
   if (ext === '.mp4' || ext === '.m4v' || ext === '.mov') args.push('-movflags', '+faststart');
+  // The MXF muxer takes its edit rate from the stream time base, and a
+  // stream-copied MOV track arrives with 1/24000 rather than 1001/24000 —
+  // "Unsupported frame rate 24000/1". Stating the rate pins the time base.
+  if (ext === '.mxf' && desc && desc.fps) args.push('-r', fpsRational(desc.fps));
   return args;
 }
 
@@ -479,13 +589,25 @@ function timecodeArgs(desc, offsetSeconds, ext) {
   return tc ? ['-timecode', tc] : [];
 }
 
+/** A preset's codec args, resolved against the source when they depend on it. */
+function presetVideo(preset, desc) {
+  if (preset.videoForSource) return preset.videoForSource(desc && desc.video, (desc && desc.fps) || 24);
+  return preset.video;
+}
+
+/** Fit the picture inside W×H, pad the remainder, square pixels. */
+function conformFilter(W, H) {
+  return 'scale=' + W + ':' + H + ':force_original_aspect_ratio=decrease,pad=' + W + ':' + H + ':(ow-iw)/2:(oh-ih)/2,setsar=1';
+}
+
 /** Video encode args for a preset, adapted to the source's pixel format. */
 function presetVideoArgs(presetKey, desc, extraFilters) {
   const preset = ENCODE_PRESETS[presetKey];
   if (!preset) throw new Error('Unknown encode preset: ' + presetKey);
-  const args = preset.video.slice();
+  const args = presetVideo(preset, desc).slice();
   if (preset.pixFmtForSource) args.push('-pix_fmt', preset.pixFmtForSource(desc && desc.video));
   const filters = [];
+  if (preset.conform) filters.push(conformFilter(preset.conform.width, preset.conform.height));
   if (preset.evenDims) filters.push('scale=trunc(iw/2)*2:trunc(ih/2)*2');
   if (extraFilters) filters.push(...extraFilters.filter(Boolean));
   if (filters.length) args.push('-vf', filters.join(','));
@@ -530,14 +652,16 @@ async function trim(source, opts) {
   args.push('-map', '0:v:0');
   if (desc.audio.length) args.push('-map', '0:a');
 
+  const a0 = desc.audio[0];
+  const audioOpts = a0 ? { channels: a0.channels, sampleRate: a0.sampleRate } : {};
   if (mode === 'copy') {
-    args.push('-c:v', 'copy', ...audioArgs(ext, desc.audio[0] && desc.audio[0].codec, { channels: desc.audio[0] && desc.audio[0].channels }));
+    args.push('-c:v', 'copy', ...audioArgs(ext, a0 && a0.codec, audioOpts));
     args.push('-avoid_negative_ts', 'make_zero');
   } else {
     args.push(...presetVideoArgs(opts.preset || 'prores_422hq', desc, [lutFilter(opts.lut)]));
-    if (desc.audio.length) args.push(...audioArgs(ext, desc.audio[0].codec, { channels: desc.audio[0].channels }));
+    if (desc.audio.length) args.push(...audioArgs(ext, a0.codec, audioOpts));
   }
-  args.push(...timecodeArgs(desc, inTime, ext), ...containerArgs(ext), opts.output);
+  args.push(...timecodeArgs(desc, inTime, ext), ...containerArgs(ext, desc), opts.output);
 
   await runFfmpeg(args, { jobId: opts.jobId, output: opts.output, onProgress: opts.onProgress, duration: len });
   return { output: opts.output, mode, inTime, outTime, snapped, duration: len };
@@ -618,7 +742,7 @@ async function concatDemux(files, output, ext, desc, opts) {
     const args = ['-y', '-hide_banner', '-nostdin', '-f', 'concat', '-safe', '0', '-i', listPath,
       '-map', '0:v:0'];
     if (desc.audio && desc.audio.length) args.push('-map', '0:a');
-    args.push('-c', 'copy', '-fflags', '+genpts', ...timecodeArgs(desc, 0, ext), ...containerArgs(ext), output);
+    args.push('-c', 'copy', '-fflags', '+genpts', ...timecodeArgs(desc, 0, ext), ...containerArgs(ext, desc), output);
     await runFfmpeg(args, { jobId: opts.jobId, output, onProgress: opts.onProgress, duration: opts.duration });
   } finally {
     try { fs.unlinkSync(listPath); } catch (_) { /* ignore */ }
@@ -637,7 +761,9 @@ async function concatEncode(descs, entries, output, ext, opts) {
   if (!preset) throw new Error('Unknown encode preset: ' + presetKey);
 
   const first = descs[0];
-  const W = first.video.width, H = first.video.height;
+  // A fixed-raster preset (DNxHD) sets the canvas; otherwise the first movie does.
+  const W = preset.conform ? preset.conform.width : first.video.width;
+  const H = preset.conform ? preset.conform.height : first.video.height;
   const fps = first.fps || 24;
   const anyAudio = descs.some((d) => d.audio.length);
   const firstAudio = descs.find((d) => d.audio.length);
@@ -645,7 +771,7 @@ async function concatEncode(descs, entries, output, ext, opts) {
   const layout = channelLayoutName(channels);
 
   let pixFmt = null;
-  const vArgs = preset.video.slice();
+  const vArgs = presetVideo(preset, first).slice();
   const pfIdx = vArgs.indexOf('-pix_fmt');
   if (pfIdx >= 0) { pixFmt = vArgs[pfIdx + 1]; vArgs.splice(pfIdx, 2); }
   if (preset.pixFmtForSource) pixFmt = preset.pixFmtForSource(first.video);
@@ -662,7 +788,7 @@ async function concatEncode(descs, entries, output, ext, opts) {
     total += len;
 
     const vTrim = (inT > 0 || outT) ? 'trim=start=' + inT + (outT ? ':end=' + outT : '') + ',setpts=PTS-STARTPTS,' : '';
-    const geom = 'scale=' + W + ':' + H + ':force_original_aspect_ratio=decrease,pad=' + W + ':' + H + ':(ow-iw)/2:(oh-ih)/2,setsar=1,';
+    const geom = conformFilter(W, H) + ',';
     const even = preset.evenDims ? 'scale=trunc(iw/2)*2:trunc(ih/2)*2,' : '';
     graph.push('[' + i + ':v:0]' + vTrim + geom + even + 'fps=' + fpsRational(fps) + ',format=' + pixFmt + '[v' + i + ']');
 
@@ -693,7 +819,7 @@ async function concatEncode(descs, entries, output, ext, opts) {
   if (anyAudio) args.push('-map', '[acat]');
   args.push(...vArgs);
   if (anyAudio) args.push(...audioArgs(ext, null, { forceEncode: true, channels }));
-  args.push(...timecodeArgs(first, entries[0].inTime || 0, ext), ...containerArgs(ext), output);
+  args.push(...timecodeArgs(first, entries[0].inTime || 0, ext), ...containerArgs(ext, first), output);
 
   await runFfmpeg(args, { jobId: opts.jobId, output, onProgress: opts.onProgress, duration: total });
   return { duration: total };
@@ -865,7 +991,7 @@ async function removeAudio(source, opts) {
   const desc = await describeSource(source);
   const ext = path.extname(opts.output).toLowerCase();
   const args = ['-y', '-hide_banner', '-nostdin', '-i', source.path, '-map', '0:v:0', '-c:v', 'copy', '-an',
-    ...timecodeArgs(desc, 0, ext), ...containerArgs(ext), opts.output];
+    ...timecodeArgs(desc, 0, ext), ...containerArgs(ext, desc), opts.output];
   await runFfmpeg(args, { jobId: opts.jobId, output: opts.output, onProgress: opts.onProgress, duration: desc.duration });
   return { output: opts.output };
 }
@@ -904,7 +1030,7 @@ async function replaceAudio(source, opts) {
     args.push('-c:a:' + idx, enc[1]);
     if (enc[2] === '-b:a') args.push('-b:a:' + idx, enc[3]);
   });
-  args.push('-shortest', ...timecodeArgs(desc, 0, ext), ...containerArgs(ext), opts.output);
+  args.push('-shortest', ...timecodeArgs(desc, 0, ext), ...containerArgs(ext, desc), opts.output);
   await runFfmpeg(args, { jobId: opts.jobId, output: opts.output, onProgress: opts.onProgress, duration: desc.duration });
   return { output: opts.output };
 }
@@ -944,7 +1070,7 @@ async function muteChannels(source, opts) {
     args.push('-c:a:' + k, enc[1]);
     if (enc[2] === '-b:a') args.push('-b:a:' + k, enc[3]);
   });
-  args.push(...timecodeArgs(desc, 0, ext), ...containerArgs(ext), opts.output);
+  args.push(...timecodeArgs(desc, 0, ext), ...containerArgs(ext, desc), opts.output);
   await runFfmpeg(args, { jobId: opts.jobId, output: opts.output, onProgress: opts.onProgress, duration: desc.duration });
   return { output: opts.output };
 }
