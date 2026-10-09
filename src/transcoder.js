@@ -242,6 +242,12 @@ function probeFile(filePath) {
 }
 
 function parseProbeOutput(output, filePath) {
+  // Album art embedded in an MP3/M4A/FLAC shows up as a one-frame "Video"
+  // stream marked "(attached pic)". It is not picture, so remove it before the
+  // file is classified, or every tagged song would be treated as a video.
+  const hadCoverArt = /Video:.*\(attached pic\)/.test(output);
+  output = output.replace(/^.*Stream #\d+:\d+.*Video:.*\(attached pic\).*$/gm, '');
+
   const info = {
     filePath,
     codec: null,
@@ -441,11 +447,24 @@ function parseProbeOutput(output, filePath) {
   // ProRes/DNxHD/MXF handling above may already have decided; re-derive from
   // scratch so one rule owns the outcome instead of later lines silently
   // overriding earlier ones.
+  // Audio-only files (no picture) judge the container by the audio containers
+  // Chromium reads on its own; anything else (AIFF, WMA, AC-3, DTS, ALAC, ...)
+  // is converted to FLAC first. Note the file extension is the container here.
+  info.audioOnly = !info.codec && !!info.audioCodec;
+  if (info.audioOnly) {
+    info.width = 0;
+    info.height = 0;
+    info.fps = 0;
+    info.coverArt = hadCoverArt;
+  }
+  const nativeAudioContainers = ['mp3', 'wav', 'wave', 'flac', 'ogg', 'oga', 'opus', 'm4a', 'aac', 'weba', 'webm', 'mp4'];
+
   const videoOk = !info.codec || nativeVideoCodecs.includes(info.codec);
   const audioOk = !info.audioCodec ||
     nativeAudioCodecs.includes(info.audioCodec) ||
     isNativePcm(info.audioCodec);
-  const containerOk = !info.container || nativeContainers.includes(info.container);
+  const containerOk = !info.container ||
+    (info.audioOnly ? nativeAudioContainers : nativeContainers).includes(info.container);
 
   info.needsTranscode = !(videoOk && audioOk && containerOk);
 
@@ -502,7 +521,7 @@ function parseTimecodeToSeconds(tc, fps) {
 // ---------------------------------------------------------------------------
 function transcodeToH264(filePath, probeInfo, onProgress) {
   return new Promise((resolve, reject) => {
-    const outputPath = makeTempPath('.mp4');
+    const outputPath = makeTempPath(probeInfo.audioOnly ? '.flac' : '.mp4');
     const duration = probeInfo.duration || 0;
 
     console.log('[Transcoder] Transcoding:', filePath);
@@ -510,7 +529,15 @@ function transcodeToH264(filePath, probeInfo, onProgress) {
     console.log('[Transcoder] Duration:', duration, 'seconds');
     console.log('[Transcoder] Source codec:', probeInfo.codecFriendly || probeInfo.codec);
 
-    const args = [
+    // Audio-only: lossless FLAC (plays natively, no quality loss), no video.
+    const args = probeInfo.audioOnly ? [
+      '-y',
+      '-i', filePath,
+      '-vn',
+      '-c:a', 'flac',
+      '-compression_level', '0',
+      outputPath,
+    ] : [
       '-y',
       '-i', filePath,
       '-c:v', 'libx264',

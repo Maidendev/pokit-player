@@ -638,7 +638,33 @@
    * If target is within buffered range, seek instantly.
    * Otherwise, restart the stream at the new position.
    */
+  // Seeks run one at a time. A drag or a run of key presses fires many seeks
+  // before the first decoder restart finishes; running them concurrently made
+  // them stop/start each other's decoders and left the "Seeking…" overlay
+  // up. While one is in flight only the LATEST requested time is kept.
+  let seekInFlight = false;
+  let queuedSeekTime = null;
+
   async function seekInStream(time) {
+    if (!streamMode) return;
+    if (seekInFlight) {
+      queuedSeekTime = time;
+      return;
+    }
+    seekInFlight = true;
+    try {
+      await seekInStreamNow(time);
+    } finally {
+      seekInFlight = false;
+      if (queuedSeekTime !== null) {
+        const next = queuedSeekTime;
+        queuedSeekTime = null;
+        seekInStream(next);
+      }
+    }
+  }
+
+  async function seekInStreamNow(time) {
     if (!streamMode) return;
 
     // Clamp
@@ -660,7 +686,9 @@
 
     // Not in buffer — restart stream at new position
     console.log('[Renderer] Seeking outside buffer — restarting stream at:', time);
-    showTranscodeOverlay('Seeking…', '');
+    // While dragging the playhead the picture follows it live; a full-screen
+    // spinner on every step would hide exactly what the operator is scrubbing.
+    if (!isTimelineDragging) showTranscodeOverlay('Seeking…', '');
 
     // A seek must not change the transport state: resume only if the operator
     // was playing. Reverse shuttle drives a paused <video>, so it stays put.
@@ -823,7 +851,9 @@
 
     if (probe.needsTranscode) {
       // v1.1.0: Use streaming decode (MSE) instead of full transcode
-      const codecLabel = probe.codecFriendly || probe.codec || 'Non-native codec';
+      const codecLabel = probe.audioOnly
+        ? (probe.audioFriendly || probe.audioCodec || 'Audio')
+        : (probe.codecFriendly || probe.codec || 'Non-native codec');
       console.log('[Renderer] File needs decode — using streaming playback:', codecLabel);
 
       showTranscodeOverlay(
@@ -832,7 +862,9 @@
       );
 
       // Try MSE streaming first
-      const success = await initMSEPlayback(filePath, probe, 0);
+      // Audio-only files skip streaming: the stream decoder always builds a
+      // video track. They convert to FLAC below, which is fast.
+      const success = probe.audioOnly ? false : await initMSEPlayback(filePath, probe, 0);
 
       if (success) {
         // MSE is set up and stream is running
@@ -864,8 +896,8 @@
       // MSE streaming failed — fall back to full transcode
       console.log('[Renderer] MSE streaming failed — falling back to full transcode');
       showTranscodeOverlay(
-        'Transcoding to H.264 for playback…',
-        codecLabel + ' → H.264'
+        probe.audioOnly ? 'Converting audio for playback…' : 'Transcoding to H.264 for playback…',
+        codecLabel + (probe.audioOnly ? ' → FLAC' : ' → H.264')
       );
 
       try {
@@ -1316,6 +1348,7 @@
   }
 
   let timelineDragPos = 0; // Track position during drag for stream mode
+  let lastDragSeekAt = 0;  // throttle for live scrubbing in stream mode
 
   timelineContainer.addEventListener('mousedown', (e) => {
     if (!hasVideoLoaded) return;
@@ -1337,6 +1370,14 @@
       const duration = (currentProbeInfo && currentProbeInfo.duration) || video.duration;
       if (!streamMode && !isNaN(duration)) {
         video.currentTime = pos * duration;
+      } else if (streamMode && !isNaN(duration) && duration > 0) {
+        // Live scrub: ask for the picture at the drag position, at most about
+        // 7 times a second. seekInStream keeps only the latest request.
+        const now = performance.now();
+        if (now - lastDragSeekAt > 150) {
+          lastDragSeekAt = now;
+          seekInStream(pos * duration);
+        }
       }
       timelineProgress.style.width = (pos * 100) + '%';
       timelineThumb.style.left = (pos * 100) + '%';
@@ -1459,7 +1500,26 @@
     drawLutFrame();               // paused + seeked: rVFC will not fire, draw by hand
     renderMarkersPanelActive();
   });
+  // Audio-only media has no picture: show an audio icon and the file's details
+  // in the middle of the player instead of an empty black frame.
+  function updateAudioPlaceholder() {
+    const el = document.getElementById('audio-placeholder');
+    if (!el) return;
+    const isAudio = video.readyState >= 1 && video.videoWidth === 0;
+    el.classList.toggle('visible', isAudio);
+    if (!isAudio) return;
+    const name = (originalFilePath || currentFilePath || '').split(/[\\/]/).pop();
+    document.getElementById('audio-placeholder-name').textContent = name;
+    const p = currentProbeInfo || {};
+    const bits = [(p.container || '').toUpperCase(), p.audioFriendly, p.audioDetails]
+      .filter(Boolean)
+      .filter((b, i, all) => all.findIndex((x) => x.toLowerCase() === b.toLowerCase()) === i);
+    document.getElementById('audio-placeholder-info').textContent = bits.join(' · ');
+  }
+  video.addEventListener('emptied', updateAudioPlaceholder);
+
   video.addEventListener('loadedmetadata', () => {
+    updateAudioPlaceholder();
     // New media with a device selected: route it. Dimensions are known now.
     if (sdiDevice) sdiStartForCurrentMedia();
     console.log('[Renderer] Video metadata loaded:', video.videoWidth + 'x' + video.videoHeight, 'duration:', video.duration);
@@ -1485,6 +1545,10 @@
     '.flv', '.wmv', '.mpg', '.mpeg', '.mxf',
     '.ts', '.m2ts', '.mts', '.m2v', '.mpv', '.vob', '.gxf', '.asf', '.mj2',
     '.3gp', '.3g2',
+    '.mp3', '.wav', '.wave', '.bwf', '.flac', '.aac', '.m4a', '.m4b', '.mp2', '.mp1',
+    '.oga', '.opus', '.spx', '.aif', '.aiff', '.aifc', '.wma', '.caf', '.ac3', '.eac3',
+    '.ec3', '.dts', '.dtshd', '.thd', '.mlp', '.mka', '.weba', '.amr', '.awb', '.ape',
+    '.wv', '.tta', '.au', '.snd', '.mpc', '.ra', '.3ga', '.adts', '.w64', '.rf64', '.gsm',
     '.dpx', '.exr', '.tif', '.tiff', '.png', '.jpg', '.jpeg',
   ];
 

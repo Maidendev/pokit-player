@@ -31,6 +31,17 @@
            it survives transcoded and MSE-streamed playback alike -->
       <div id="caption-overlay" class="hidden"><div id="caption-text"></div></div>
 
+      <!-- Audio-only media: icon and file details instead of an empty frame -->
+      <div id="audio-placeholder">
+        <svg class="audio-icon" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M26 46V18l22-6v28" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+          <circle cx="19" cy="46" r="7" stroke="currentColor" stroke-width="2.5"/>
+          <circle cx="41" cy="40" r="7" stroke="currentColor" stroke-width="2.5"/>
+        </svg>
+        <div id="audio-placeholder-name"></div>
+        <div id="audio-placeholder-info"></div>
+      </div>
+
       <!-- Always-on channel meters, docked right. Shows at a glance how many
            audio channels the file carries; fades with the transport bar. -->
       <div id="meter-hud" class="hidden">
@@ -47,9 +58,9 @@
             <polygon points="26,22 26,38 40,30" fill="currentColor" opacity="0.6"/>
             <path d="M32 52 L32 58 M24 58 L40 58" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
           </svg>
-          <h2>Drop a video file here</h2>
+          <h2>Drop a video or audio file here</h2>
           <p>or press <kbd>⌘O</kbd> / <kbd>Ctrl+O</kbd> to open</p>
-          <p class="formats-hint">Supported: MP4, WebM, MKV, AVI, MOV, ProRes, DNxHD/HR, MXF, Image Sequences</p>
+          <p class="formats-hint">Supported: MP4, WebM, MKV, AVI, MOV, ProRes, DNxHD/HR, MXF, Image Sequences, plus audio: MP3, WAV, FLAC, AAC, M4A, AIFF, OGG, Opus, WMA, AC-3 and more</p>
         </div>
       </div>
 

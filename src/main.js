@@ -13,6 +13,7 @@ const { autoUpdater } = require('electron-updater');
 
 let mainWindow = null;
 let streamDecoder = null; // Singleton stream decoder instance
+let streamProbeCache = null; // { filePath, mtimeMs, size, probe } for the last stream start
 
 /** Send a named editing command to the renderer (menu → player). */
 function sendEdit(name, payload) {
@@ -277,8 +278,16 @@ const VIDEO_EXTENSIONS = [
   // all, so it is probed and decoded through src/braw.js instead.
   ...braw.BRAW_EXTENSIONS,
 ];
+// Audio-only files. .ogg is already listed above. Anything FFmpeg can decode
+// that Chromium cannot (WMA, AC-3, DTS, AIFF, ALAC, ...) is converted to FLAC.
+const AUDIO_EXTENSIONS = [
+  '.mp3', '.wav', '.wave', '.bwf', '.flac', '.aac', '.m4a', '.m4b', '.mp2', '.mp1',
+  '.oga', '.opus', '.spx', '.aif', '.aiff', '.aifc', '.wma', '.caf', '.ac3', '.eac3',
+  '.ec3', '.dts', '.dtshd', '.thd', '.mlp', '.mka', '.weba', '.amr', '.awb', '.ape',
+  '.wv', '.tta', '.au', '.snd', '.mpc', '.ra', '.3ga', '.adts', '.w64', '.rf64', '.gsm',
+];
 const IMAGE_SEQ_EXTENSIONS = transcoder.IMAGE_SEQ_EXTENSIONS; // .dpx .exr .tif .tiff .png .jpg .jpeg
-const ALL_EXTENSIONS = [...VIDEO_EXTENSIONS, ...IMAGE_SEQ_EXTENSIONS];
+const ALL_EXTENSIONS = [...VIDEO_EXTENSIONS, ...AUDIO_EXTENSIONS, ...IMAGE_SEQ_EXTENSIONS];
 
 function getIconPath() {
   if (process.platform === 'win32') {
@@ -710,9 +719,13 @@ function buildMenu() {
 async function openFileDialog() {
   if (!mainWindow) return;
   const result = await dialog.showOpenDialog(mainWindow, {
-    title: 'Open Video File',
+    title: 'Open Media File',
     properties: ['openFile'],
     filters: [
+      {
+        name: 'Audio Files',
+        extensions: AUDIO_EXTENSIONS.map((e) => e.slice(1)).concat('ogg'),
+      },
       {
         name: 'Video Files',
         extensions: [
@@ -967,10 +980,20 @@ ipcMain.handle('render-image-sequence', async (_event, seqInfo, fps) => {
 ipcMain.handle('start-stream', async (_event, filePath, seekTime = 0) => {
   console.log('[Main] IPC: start-stream', filePath, 'seek:', seekTime);
   try {
-    // Probe the file first
-    const probe = await transcoder.probeFile(filePath);
-    if (probe.error) {
-      return { error: probe.error };
+    // Probe the file first. Every seek restarts the stream, and re-running
+    // ffmpeg -i on a large file for each one added a noticeable delay, so the
+    // last result is reused while the file on disk is unchanged.
+    let probe;
+    const stat = fs.statSync(filePath);
+    if (streamProbeCache && streamProbeCache.filePath === filePath &&
+        streamProbeCache.mtimeMs === stat.mtimeMs && streamProbeCache.size === stat.size) {
+      probe = streamProbeCache.probe;
+    } else {
+      probe = await transcoder.probeFile(filePath);
+      if (probe.error) {
+        return { error: probe.error };
+      }
+      streamProbeCache = { filePath, mtimeMs: stat.mtimeMs, size: stat.size, probe };
     }
 
     // Create or reuse stream decoder

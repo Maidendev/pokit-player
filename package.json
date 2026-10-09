@@ -1,6 +1,6 @@
 {
   "name": "maidenplayer",
-  "version": "1.5.2",
+  "version": "1.5.3",
   "description": "MaidenPlayer — A professional cross-platform video player with instant streaming playback for ProRes/DNxHD/DNxHR, QuickTime shortcuts, timecode display, and file info viewer.",
   "main": "src/main.js",
   "repository": {
@@ -70,8 +70,16 @@
         }
       ],
       "icon": "src/assets/icon.ico",
-      "publisherName": "Maiden Media Solutions INC.",
-      "verifyUpdateCodeSignature": false,
+      "signtoolOptions": {
+        "sign": "./scripts/sign-windows.js",
+        "signingHashAlgorithms": [
+          "sha256"
+        ],
+        "publisherName": [
+          "Maiden Media Solutions INC."
+        ]
+      },
+      "verifyUpdateCodeSignature": true,
       "requestedExecutionLevel": "asInvoker",
       "extraFiles": [],
       "files": [

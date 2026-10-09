@@ -449,6 +449,32 @@ jobs:
           echo "CSC_NAME=$name" >> "$GITHUB_ENV"
           echo "CERT_PREINSTALLED=1" >> "$GITHUB_ENV"
 
+      # scripts/sign-windows.js signs through signtool and the Azure Artifact
+      # Signing dlib. Fetch the dlib from NuGet and write the metadata file the
+      # dlib reads; the AZURE_* service-principal secrets reach it through the
+      # Build step's environment.
+      - name: Install Azure Artifact Signing client
+        if: runner.os == 'Windows' && env.WIN_SIGNING == 'azure'
+        shell: pwsh
+        env:
+          AZURE_SIGN_ENDPOINT: ${{ secrets.AZURE_SIGN_ENDPOINT }}
+          AZURE_SIGN_ACCOUNT: ${{ secrets.AZURE_SIGN_ACCOUNT }}
+          AZURE_SIGN_PROFILE: ${{ secrets.AZURE_SIGN_PROFILE }}
+        run: |
+          $pkg = Join-Path $env:RUNNER_TEMP 'signing-client'
+          nuget install Microsoft.Trusted.Signing.Client -OutputDirectory $pkg -NonInteractive | Out-Null
+          $dlib = Get-ChildItem -Path $pkg -Recurse -Filter Azure.CodeSigning.Dlib.dll |
+            Where-Object { $_.FullName -match 'x64' } | Select-Object -First 1
+          $signtool = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe' |
+            Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $dlib -or -not $signtool) { throw "signtool or Azure.CodeSigning.Dlib.dll not found" }
+          $meta = Join-Path $env:RUNNER_TEMP 'metadata.json'
+          @{ Endpoint = $env:AZURE_SIGN_ENDPOINT; CodeSigningAccountName = $env:AZURE_SIGN_ACCOUNT; CertificateProfileName = $env:AZURE_SIGN_PROFILE } |
+            ConvertTo-Json | Set-Content -Path $meta -Encoding utf8
+          "SIGNTOOL_PATH=$($signtool.FullName)" >> $env:GITHUB_ENV
+          "AZURE_SIGN_DLIB_PATH=$($dlib.FullName)" >> $env:GITHUB_ENV
+          "AZURE_SIGN_METADATA=$meta" >> $env:GITHUB_ENV
+
       # On a version tag, upload to a DRAFT GitHub Release (releaseType in
       # package.json). The `publish` job at the bottom makes it public once
       # both platforms have uploaded — that public Release is the update feed
@@ -497,17 +523,14 @@ jobs:
             case "${WIN_SIGNING:-none}" in
               azure)
                 unset WIN_CSC_LINK WIN_CSC_KEY_PASSWORD
-                extra+=( "-c.win.azureSignOptions.endpoint=$AZURE_SIGN_ENDPOINT"
-                         "-c.win.azureSignOptions.codeSigningAccountName=$AZURE_SIGN_ACCOUNT"
-                         "-c.win.azureSignOptions.certificateProfileName=$AZURE_SIGN_PROFILE"
-                         "-c.win.verifyUpdateCodeSignature=true" )
-                echo "signing Windows build with Azure Trusted Signing ($AZURE_SIGN_ACCOUNT / $AZURE_SIGN_PROFILE)" ;;
+                echo "signing Windows build with Azure Artifact Signing via scripts/sign-windows.js ($AZURE_SIGN_ACCOUNT / $AZURE_SIGN_PROFILE)" ;;
               pfx)
                 unset AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_CLIENT_SECRET
-                extra+=( "-c.win.verifyUpdateCodeSignature=true" )
-                echo "signing Windows build with the WIN_CSC_LINK certificate" ;;
+                echo "::warning title=WIN_CSC_LINK is not used::package.json signs through scripts/sign-windows.js (Azure only); the .pfx certificate is ignored."
+                export AZURE_SIGN_SKIP=1 ;;
               *)
                 unset WIN_CSC_LINK WIN_CSC_KEY_PASSWORD AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_CLIENT_SECRET
+                export AZURE_SIGN_SKIP=1
                 echo "Windows build will be UNSIGNED" ;;
             esac
           else
