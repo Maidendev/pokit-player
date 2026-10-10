@@ -461,13 +461,22 @@ jobs:
           AZURE_SIGN_ACCOUNT: ${{ secrets.AZURE_SIGN_ACCOUNT }}
           AZURE_SIGN_PROFILE: ${{ secrets.AZURE_SIGN_PROFILE }}
         run: |
+          # Download the package straight from nuget.org (a .nupkg is a zip) so the
+          # runner's nuget CLI is not needed, and print what was found.
+          $ver = '1.0.95'
           $pkg = Join-Path $env:RUNNER_TEMP 'signing-client'
-          nuget install Microsoft.Trusted.Signing.Client -OutputDirectory $pkg -NonInteractive | Out-Null
+          New-Item -ItemType Directory -Force $pkg | Out-Null
+          $zip = Join-Path $pkg 'client.zip'
+          Invoke-WebRequest "https://api.nuget.org/v3-flatcontainer/microsoft.trusted.signing.client/$ver/microsoft.trusted.signing.client.$ver.nupkg" -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath $pkg -Force
           $dlib = Get-ChildItem -Path $pkg -Recurse -Filter Azure.CodeSigning.Dlib.dll |
             Where-Object { $_.FullName -match 'x64' } | Select-Object -First 1
-          $signtool = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe' |
+          $signtool = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe' -ErrorAction SilentlyContinue |
             Sort-Object FullName -Descending | Select-Object -First 1
-          if (-not $dlib -or -not $signtool) { throw "signtool or Azure.CodeSigning.Dlib.dll not found" }
+          Write-Host "dlib:     $($dlib.FullName)"
+          Write-Host "signtool: $($signtool.FullName)"
+          if (-not $dlib) { Get-ChildItem -Path $pkg -Recurse | Select-Object -First 40 | ForEach-Object { Write-Host $_.FullName }; throw "Azure.CodeSigning.Dlib.dll (x64) not found in the package" }
+          if (-not $signtool) { throw "signtool.exe not found under Windows Kits" }
           $meta = Join-Path $env:RUNNER_TEMP 'metadata.json'
           @{ Endpoint = $env:AZURE_SIGN_ENDPOINT; CodeSigningAccountName = $env:AZURE_SIGN_ACCOUNT; CertificateProfileName = $env:AZURE_SIGN_PROFILE } |
             ConvertTo-Json | Set-Content -Path $meta -Encoding utf8
