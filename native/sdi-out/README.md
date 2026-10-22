@@ -20,8 +20,8 @@ and needs no account; this is the missing output.
 
 ```
 EXR / DPX / ProRes → ffmpeg (v210, 10-bit 4:2:2) → sdi-out → DeckLink → SDI
-                                                      ↑
-                                          control lines on fd 3
+                            (PCM 48 kHz 32-bit) ↗     ↑         (picture + embedded sound)
+                                 on fd 4       control lines on fd 3
 ```
 
 **It never uses the H.264 proxy.** Image sequences are rendered to H.264 at
@@ -42,6 +42,23 @@ the card sees one continuous stream and nothing has to hold a clip in RAM — at
 forever. When playback is not at the start, the decode is two inputs joined by
 the `concat` filter — the remainder from here, then the whole clip looping —
 verified frame by frame (5…10, then 1…10, 1…10 …) on ffmpeg 6.1 and 9.0.
+
+**Sound goes out embedded in the SDI stream, in step with the picture.** The
+*same* ffmpeg that decodes the frames writes the clip's audio as raw PCM
+(48 kHz, 32-bit integer, interleaved) on a second output pipe, which reaches
+the helper on fd 4. One decoder for both means a seek or a loop lands picture
+and sound on the same instant. The helper schedules the samples with
+`ScheduleAudioSamples` at the stream time of the frame they belong to, the way
+ffmpeg's own DeckLink muxer does (`BeginAudioPreroll` → schedule →
+`EndAudioPreroll` → `StartScheduledPlayback`), and the card embeds them. SDI
+carries 2, 8 or 16 channels and nothing in between, so a 5.1 master goes out
+as 8 with two empty; channels are laid into the embed in source order and
+never mixed, because on a review projector the question is "is the Ls where it
+should be". Discrete mono tracks are merged into one stream first, as the
+desktop player does. The device says how many channels it can carry
+(`maxAudioChannels` in `--list-devices`); if sound cannot be enabled the
+helper says so on stderr and carries on with picture only — a silent
+projector is still a screening, a black one is not.
 
 **A seek or a loop toggle restarts the session — gracefully.** The player
 sends `stop`, waits for this process to exit (it stops the schedule, disables
@@ -67,8 +84,15 @@ for up to two seconds, for whatever release delay the driver still has.
   v210 row is `((w+47)/48)*128` and DeckLink documents the same, but if they
   ever differ the copy goes row by row rather than shearing the image.
 - **Pause holds the last frame** on the projector via `DisplayVideoFrameSync`.
-  Frames scheduled but not yet shown are flushed by the card and lost; resume
-  prerolls fresh ones, so a few frames skip on resume.
+  Frames the card had scheduled but not yet shown come back flushed and are
+  put back in line in source order — every frame carries its index — so
+  resume continues from the picture that was on screen. Sound is re-aligned
+  to the first frame that goes back out; scheduled sound is kept until its
+  picture has actually been shown, because a flush takes it off the card too.
+- **A repeated frame gets a frame of silence.** When an underrun shows a
+  picture twice, the sound for that slot is quiet and the source does not
+  advance, so picture and sound stay together instead of drifting a frame
+  apart for the rest of the clip.
 - **The cushion is deep on purpose.** `--buffer-frames` (default 24, one second
   at 24 fps) is how many frames sit on the card ahead of the clock; half are
   prerolled before it starts. The cost is RAM — about 570 MB at 4K DCI.
@@ -98,6 +122,7 @@ Video is absent.
 
 ```json
 [{ "index": 0, "name": "UltraStudio 4K Mini", "model": "UltraStudio 4K Mini",
+   "maxAudioChannels": 16,
    "modes": [{ "id": "4d24", "name": "4K DCI 24p", "width": 4096, "height": 2160,
                "fps": 24, "fpsRational": "24000/1000" }, "..."] }]
 ```
@@ -105,12 +130,18 @@ Video is absent.
 `id` is the `BMDDisplayMode` FourCC as four characters. It is what `--mode`
 takes, so the player never handles an SDK enum. `index` is the iterator
 position and stays stable even when capture-only devices are skipped.
+`maxAudioChannels` is how many channels of embedded sound the device carries,
+0 when the driver would not say — the player then settles for stereo.
 
-### `sdi-out --play --device N --mode XXXX [--buffer-frames 24]`
+### `sdi-out --play --device N --mode XXXX [--buffer-frames 24] [--audio-channels 2|8|16]`
 
 v210 frames on **stdin**, back to back. Control lines on **fd 3**: `play`,
-`pause`, `stop`. Status lines on stderr, prefixed `status:` — `mode …`,
-`playing`, `paused`, `underrun`, `recovered`, `eof frames=N`, `stopped`.
+`pause`, `stop`. With `--audio-channels`, sound on **fd 4**: 48 kHz, 32-bit
+signed little-endian integer PCM, interleaved, that many channels, starting
+from the same point in the clip as the first frame on stdin. Status lines on
+stderr, prefixed `status:` — `mode … audio=8ch|off|unavailable`, `playing`,
+`paused`, `underrun`, `recovered`, `eof frames=N [audio-samples=S]`,
+`stopped`.
 
 ## Row stride — the trap
 
@@ -229,5 +260,16 @@ over the control channel, gapless loop past the clip end, zero underruns with
 the default cushion. The real helper compiles universal against the SDK and
 enumerates correctly on a machine with no driver.
 
-**Playout itself has not been seen on a card.** There is no way to emulate an
-SDI output; the first real test is on the rig.
+With sound, against the same stub on Windows, with 2-second ProRes clips at
+1080p24 (48 frames, 96,000 sample frames): stereo, 5.1 (sent as 8 channels),
+two discrete mono tracks (merged) and mono (doubled) each arrived as exactly
+48 frames and 96,000 samples at EOF; a seek to 1.0 s gave 24 frames and
+48,000 samples; pause and resume lost nothing; looping from the start and
+from mid-clip (the concat graph with sound) ran past the clip end with the
+sound never behind the picture. A session with no sound produces the same
+ffmpeg arguments as before, byte for byte.
+
+**Playout itself has not been seen on a card — picture or sound.** There is
+no way to emulate an SDI output; the first real test is on the rig. The audio
+calls follow ffmpeg's own DeckLink muxer (`libavdevice/decklink_enc.cpp`),
+which is the most widely run code path on this API.

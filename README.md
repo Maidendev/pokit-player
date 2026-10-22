@@ -61,6 +61,11 @@ Deep inspection via ffprobe, in a summary view with an expandable **Advanced** s
   card itself reports it can drive, so a 24p sequence never lands on a 23.98
   mode. Details, the stride trap and decode-speed limits are in
   [native/sdi-out](native/sdi-out/README.md). macOS only for now.
+- **Sound goes out embedded in the SDI stream**, in step with the picture:
+  48 kHz 32-bit PCM, as 2, 8 or 16 channels depending on the source and what
+  the device carries. A 5.1 master goes out as 8 channels with the source
+  order kept and nothing mixed; discrete mono tracks are merged into one
+  stream first. Pause, resume, seek and loop keep sound and picture together.
 - **Audio codecs** — AAC, MP3, Opus, Vorbis, FLAC play natively; AC-3, E-AC-3, DTS,
   TrueHD and PCM are decoded through the streaming path
 - A file plays natively only when the container, video codec **and** audio codec are all

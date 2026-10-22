@@ -1644,6 +1644,12 @@
     } else {
       opts.source = originalFilePath;
       opts.startTime = video.currentTime || 0;
+      // The clip's sound goes out with it. The probe counted its streams and
+      // channels; the main process decides how many the device can carry.
+      if (currentProbeInfo && currentProbeInfo.audioCodec) {
+        opts.audioStreamCount = currentProbeInfo.audioStreamCount || 1;
+        opts.audioChannelsTotal = currentProbeInfo.audioChannelsTotal || 2;
+      }
     }
 
     const r = await window.electronAPI.sdiStart(opts);
@@ -1655,7 +1661,8 @@
       return;
     }
     sdiActive = true;
-    console.log('[SDI] Routing to', r.device, 'as', r.mode);
+    console.log('[SDI] Routing to', r.device, 'as', r.mode,
+                r.audioChannels ? 'with ' + r.audioChannels + '-channel audio' : 'picture only');
   }
 
   /** A seek or a loop change means a fresh decode from a new place. Debounced:

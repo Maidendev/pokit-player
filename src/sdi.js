@@ -15,9 +15,14 @@
  * touches the proxy:
  *
  *   EXR / DPX / ProRes → ffmpeg (v210, 10-bit 4:2:2) → sdi-out → DeckLink → SDI
+ *                               (PCM, 48 kHz 32-bit) ↗  on a second pipe
  *
  * v210 is the DeckLink-native pixel format (bmdFormat10BitYUV), so frames
- * reach the card with no conversion.
+ * reach the card with no conversion. Sound travels beside the picture, not
+ * inside it: the same ffmpeg writes the clip's audio as raw PCM on a second
+ * output pipe, the helper reads it on fd 4 and schedules it against the same
+ * clock as the frames, and the card embeds it in the SDI stream. One decoder
+ * for both means they can never start from different places in the clip.
  *
  * WHY THE CLOCK LIVES IN A SEPARATE PROCESS
  *
@@ -241,6 +246,89 @@ function matchModeForSource(source, supported) {
 }
 
 // ---------------------------------------------------------------------------
+// Sound
+//
+// SDI embeds 48 kHz PCM in groups: a device carries 2, 8 or 16 channels and
+// nothing in between, so a 5.1 master goes out as 8 with two empty, and a
+// mono guide track is put on both sides of the room. Channels are laid into
+// the embed in source order and never mixed — on a review projector the
+// question is "is the Ls where it should be", and a downmix cannot answer it.
+// 32-bit integer samples carry a 24-bit master without loss.
+// ---------------------------------------------------------------------------
+
+const AUDIO_RATE = 48000;
+
+/**
+ * Channels to embed for a source with `total` channels on a device that
+ * carries up to `deviceMax`. 0 means no sound.
+ */
+function audioOutputChannels(total, deviceMax) {
+  if (!Number.isFinite(total) || total < 1) return 0;
+  const want = total <= 2 ? 2 : total <= 8 ? 8 : 16;
+  // An unreported maximum means stereo — the one count every output has.
+  const max = deviceMax >= 16 ? 16 : deviceMax >= 8 ? 8 : 2;
+  return Math.min(want, max);
+}
+
+/**
+ * What sound to send with a source, from the playback probe, or null when
+ * the source has none. Image sequences have none by nature.
+ *
+ * @param {{audioStreamCount?:number, audioChannelsTotal?:number}|null} probe
+ * @param {{maxAudioChannels?:number}|null} device  An entry from listDevices().
+ * @returns {{streams:number, channels:number, outChannels:number}|null}
+ */
+function planAudio(probe, device) {
+  if (!probe) return null;
+  const streams = Math.max(0, probe.audioStreamCount | 0);
+  const channels = Math.max(0, probe.audioChannelsTotal | 0);
+  if (streams < 1 || channels < 1) return null;
+  const outChannels = audioOutputChannels(channels, device ? device.maxAudioChannels : 0);
+  if (!outChannels) return null;
+  return { streams, channels, outChannels };
+}
+
+/**
+ * ffmpeg filter laying the source channels into the first slots of an
+ * `outChannels`-wide embed, in order, with no mixing. Mono is doubled.
+ */
+function audioLayoutFilter(channels, outChannels) {
+  const maps = [];
+  if (channels === 1) {
+    maps.push('c0=c0', 'c1=c0');
+  } else {
+    for (let i = 0; i < Math.min(channels, outChannels); i++) maps.push('c' + i + '=c' + i);
+  }
+  return 'pan=' + outChannels + 'c|' + maps.join('|');
+}
+
+/**
+ * The audio half of the filter chain. aresample pins the sound to the
+ * timeline: first_pts=0 pads silence when a track starts late, and async=1
+ * fills or trims around gaps in its timestamps without stretching — so
+ * sample N is always at N/48000 s from where playback started, which is the
+ * contract the helper schedules against.
+ */
+function audioFilter(audio) {
+  return 'aresample=' + AUDIO_RATE + ':async=1:first_pts=0,' + audioLayoutFilter(audio.channels, audio.outChannels);
+}
+
+/**
+ * Filtergraph fragment that yields input `i`'s sound as one stream. Masters
+ * routinely carry audio as discrete mono tracks (a pair as two monos, 5.1 as
+ * six); ffmpeg's default selection would keep only one, so they are merged
+ * into a single stream with each track as its own channel, as the desktop
+ * player does.
+ */
+function audioSource(i, audio) {
+  if (audio.streams > 1) {
+    const inputs = Array.from({ length: audio.streams }, (_, k) => '[' + i + ':a:' + k + ']').join('');
+    return { graph: inputs + 'amerge=inputs=' + audio.streams + '[a' + i + 'm]', label: '[a' + i + 'm]' };
+  }
+  return { graph: null, label: '[' + i + ':a:0]' };
+}
+
+// ---------------------------------------------------------------------------
 // Decode to v210
 // ---------------------------------------------------------------------------
 
@@ -261,12 +349,15 @@ function matchModeForSource(source, supported) {
  * @param {number} [opts.startTime]     Everything else — seek position in seconds.
  * @param {boolean} [opts.loop]
  * @param {string}  [opts.lut]          Path to a .cube LUT to apply to the output picture.
+ * @param {object}  [opts.audio]        From planAudio(). When present the sound goes out as
+ *                                      raw PCM on ffmpeg's fd 3, beside the frames on stdout.
  * @returns {string[]}
  */
 function buildDecodeArgs(opts) {
   const { source, mode } = opts;
   if (!source) throw new Error('buildDecodeArgs: source is required');
   if (!mode) throw new Error('buildDecodeArgs: mode is required');
+  const audio = (opts.audio && opts.audio.outChannels > 0) ? opts.audio : null;
 
   // Fit to the mode without cropping or stretching: scale to fit, then pad to
   // the exact raster. force_original_aspect_ratio keeps the framing intact.
@@ -307,28 +398,71 @@ function buildDecodeArgs(opts) {
     : !(opts.startTime > 0);
 
   const args = [];
-  if (!opts.loop) {
-    args.push(...fromHere, '-vf', fit);
-  } else if (atStart) {
-    args.push('-stream_loop', '-1', ...fromHere, '-vf', fit);
-  } else {
-    const fromStart = ['-stream_loop', '-1'];
-    if (opts.isImageSequence) fromStart.push('-framerate', mode.fpsRational, '-start_number', String(opts.firstFrame));
-    fromStart.push('-i', source);
-    args.push(...fromHere, ...fromStart, '-filter_complex', '[0:v][1:v]concat=n=2:v=1:a=0,' + fit);
-  }
-  args.push('-r', mode.fpsRational);
+  if (!audio) {
+    if (!opts.loop) {
+      args.push(...fromHere, '-vf', fit);
+    } else if (atStart) {
+      args.push('-stream_loop', '-1', ...fromHere, '-vf', fit);
+    } else {
+      const fromStart = ['-stream_loop', '-1'];
+      if (opts.isImageSequence) fromStart.push('-framerate', mode.fpsRational, '-start_number', String(opts.firstFrame));
+      fromStart.push('-i', source);
+      args.push(...fromHere, ...fromStart, '-filter_complex', '[0:v][1:v]concat=n=2:v=1:a=0,' + fit);
+    }
+    args.push('-r', mode.fpsRational);
 
-  // v210 is what the card takes natively, so this is the last conversion.
-  args.push('-c:v', 'v210', '-an', '-f', 'rawvideo', 'pipe:1');
+    // v210 is what the card takes natively, so this is the last conversion.
+    args.push('-c:v', 'v210', '-an', '-f', 'rawvideo', 'pipe:1');
+    return args;
+  }
+
+  // With sound, picture and sound are two outputs of ONE decode, so a seek
+  // or a loop lands both at the same sample. Everything goes through one
+  // filtergraph: the picture chain as above, the sound merged (if discrete),
+  // pinned to the timeline and laid into the embed.
+  const graph = [];
+  if (!opts.loop || atStart) {
+    if (opts.loop) args.push('-stream_loop', '-1');
+    args.push(...fromHere);
+    const a0 = audioSource(0, audio);
+    graph.push('[0:v]' + fit + '[v]');
+    if (a0.graph) graph.push(a0.graph);
+    graph.push(a0.label + audioFilter(audio) + '[a]');
+  } else {
+    // Mid-clip loop: the remainder from here, then the whole clip forever —
+    // joined for sound and picture together, so the join is at the same
+    // instant in both.
+    const fromStart = ['-stream_loop', '-1', '-i', source];
+    args.push(...fromHere, ...fromStart);
+    const a0 = audioSource(0, audio);
+    const a1 = audioSource(1, audio);
+    if (a0.graph) graph.push(a0.graph);
+    if (a1.graph) graph.push(a1.graph);
+    graph.push('[0:v]' + a0.label + '[1:v]' + a1.label + 'concat=n=2:v=1:a=1[vc][ac]');
+    graph.push('[vc]' + fit + '[v]');
+    graph.push('[ac]' + audioFilter(audio) + '[a]');
+  }
+  args.push('-filter_complex', graph.join(';'));
+
+  // Two outputs, each with its own map: v210 on stdout as before, and the
+  // sound as raw 32-bit PCM on fd 3 — which the helper reads on ITS fd 4.
+  args.push('-map', '[v]', '-r', mode.fpsRational, '-c:v', 'v210', '-f', 'rawvideo', 'pipe:1');
+  args.push('-map', '[a]', '-c:a', 'pcm_s32le', '-f', 's32le', 'pipe:3');
   return args;
 }
 
-/** Spawn ffmpeg producing v210 frames on stdout. */
+/**
+ * Spawn ffmpeg producing v210 frames on stdout — and, when opts.audio is
+ * set, PCM on stdio[3]. ffmpeg's pipe: protocol writes to any inherited fd
+ * on macOS and Windows alike (checked: Node's extra 'pipe' slot reaches a
+ * Windows ffmpeg as CRT fd 3 the same way the helper sees its control pipe).
+ */
 function spawnDecoder(opts) {
   const args = buildDecodeArgs(opts);
   console.log('[SDI] Decoding:', FFMPEG, args.join(' '));
-  return spawn(FFMPEG, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  const stdio = ['ignore', 'pipe', 'pipe'];
+  if (opts.audio && opts.audio.outChannels > 0) stdio.push('pipe');
+  return spawn(FFMPEG, args, { windowsHide: true, stdio });
 }
 
 // ---------------------------------------------------------------------------
@@ -476,6 +610,7 @@ class SdiOutput {
    * @param {number}  [opts.startFrame]
    * @param {number}  [opts.startTime]
    * @param {boolean} [opts.loop]
+   * @param {object}  [opts.audio]      From planAudio(); the sound to embed, or null for none.
    */
   start(opts) {
     this.stop();
@@ -490,24 +625,33 @@ class SdiOutput {
     }
 
     this.active = true;
+    const audio = (opts.audio && opts.audio.outChannels > 0) ? opts.audio : null;
 
-    // stdin: frames. stderr: status. fd 3: control lines.
+    // stdin: frames. stderr: status. fd 3: control lines. fd 4: sound.
     // 24 frames is a second of cushion at 24 fps; see sdi-out.cpp for the
     // RAM trade-off. Callers on a constrained machine can pass fewer.
     const bufferFrames = String(Math.max(4, opts.bufferFrames || 24));
-    this.helper = spawn(helperBin, ['--play', '--device', String(opts.deviceIndex), '--mode', opts.mode.id,
-                                    '--buffer-frames', bufferFrames], {
-      windowsHide: true,
-      stdio: ['pipe', 'ignore', 'pipe', 'pipe'],
-    });
-    this.decoder = spawnDecoder(opts);
+    const helperArgs = ['--play', '--device', String(opts.deviceIndex), '--mode', opts.mode.id,
+                        '--buffer-frames', bufferFrames];
+    const helperStdio = ['pipe', 'ignore', 'pipe', 'pipe'];
+    if (audio) {
+      helperArgs.push('--audio-channels', String(audio.outChannels));
+      helperStdio.push('pipe');
+    }
+    this.helper = spawn(helperBin, helperArgs, { windowsHide: true, stdio: helperStdio });
+    this.decoder = spawnDecoder(Object.assign({}, opts, { audio }));
 
     this.decoder.stdout.pipe(this.helper.stdin);
+    if (audio) this.decoder.stdio[3].pipe(this.helper.stdio[4]);
 
     // EPIPE is the normal outcome of a stop or seek — the helper is gone and
     // ffmpeg is still writing. Not an error.
     this.helper.stdin.on('error', (e) => { if (e && e.code !== 'EPIPE') console.error('[SDI] helper stdin:', e.message); });
     this.decoder.stdout.on('error', (e) => { if (e && e.code !== 'EPIPE') console.error('[SDI] decoder stdout:', e.message); });
+    if (audio) {
+      this.helper.stdio[4].on('error', (e) => { if (e && e.code !== 'EPIPE') console.error('[SDI] helper audio:', e.message); });
+      this.decoder.stdio[3].on('error', (e) => { if (e && e.code !== 'EPIPE') console.error('[SDI] decoder audio:', e.message); });
+    }
 
     let stderrTail = '';
     const thisHelper = this.helper;
@@ -611,7 +755,9 @@ class SdiOutput {
     const graceful = !!(opts && opts.graceful);
     this.active = false;
     if (this.decoder) {
-      try { this.decoder.stdout.unpipe(); this.decoder.kill('SIGKILL'); } catch (_) { /* ignore */ }
+      try { this.decoder.stdout.unpipe(); } catch (_) { /* ignore */ }
+      try { if (this.decoder.stdio[3]) this.decoder.stdio[3].unpipe(); } catch (_) { /* ignore */ }
+      try { this.decoder.kill('SIGKILL'); } catch (_) { /* ignore */ }
       this.decoder = null;
     }
     if (this.helper) {
@@ -619,10 +765,12 @@ class SdiOutput {
       this.helper = null;
       try { h.removeAllListeners('exit'); } catch (_) { /* ignore */ }
       // Close what we hold, or the child's pipes linger in this process.
-      // stdin is destroyed — whatever frames were queued are not wanted, and
-      // the closed pipe is EOF to the helper's reader. The control channel is
-      // ENDED, not destroyed, so the `stop` just written actually arrives.
+      // stdin and the sound pipe are destroyed — whatever was queued is not
+      // wanted, and the closed pipes are EOF to the helper's readers. The
+      // control channel is ENDED, not destroyed, so the `stop` just written
+      // actually arrives.
       try { if (h.stdin) h.stdin.destroy(); } catch (_) { /* ignore */ }
+      try { if (h.stdio[4]) h.stdio[4].destroy(); } catch (_) { /* ignore */ }
       try { if (h.stdio[3]) h.stdio[3].end(); } catch (_) { /* ignore */ }
       if (!graceful) { try { h.kill('SIGTERM'); } catch (_) { /* ignore */ } }
     }
@@ -644,6 +792,10 @@ module.exports = {
   v210FrameBytes,
   findMode,
   matchModeForSource,
+  AUDIO_RATE,
+  audioOutputChannels,
+  planAudio,
+  audioLayoutFilter,
   buildDecodeArgs,
   spawnDecoder,
   listDevices,

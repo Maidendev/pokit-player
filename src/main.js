@@ -1092,6 +1092,11 @@ ipcMain.handle('sdi-start', async (_event, opts) => {
   sdiOutput.onError = (msg) => send({ state: 'error', detail: msg, device: device.name, mode: mode.name });
   sdiOutput.onEnd = () => send({ state: 'ended', device: device.name, mode: mode.name });
 
+  // The clip's sound goes out embedded with the picture. The renderer passes
+  // what the probe counted; how many channels the device can carry is its
+  // own business (maxAudioChannels, from the helper's enumeration).
+  const audio = opts.isImageSequence ? null : sdi.planAudio(opts, device);
+
   const ok = sdiOutput.start({
     deviceIndex: device.index,
     mode,
@@ -1105,10 +1110,12 @@ ipcMain.handle('sdi-start', async (_event, opts) => {
     // external output too — a grading LUT on the desktop is not always meant
     // for the room.
     lut: (lookState.lutEnabled && lookState.lutToSdi && lookState.lutPath) ? lookState.lutPath : null,
+    audio,
   });
   if (!ok) return { error: sdi.MISSING_HELPER_MESSAGE };
-  console.log('[SDI] Started:', device.name, mode.name, opts.source);
-  return { ok: true, mode: mode.name, device: device.name };
+  console.log('[SDI] Started:', device.name, mode.name, opts.source,
+              audio ? audio.outChannels + '-channel audio (' + audio.channels + ' in ' + audio.streams + ' stream(s))' : 'picture only');
+  return { ok: true, mode: mode.name, device: device.name, audioChannels: audio ? audio.outChannels : 0 };
 });
 
 ipcMain.handle('sdi-stop', async () => { if (sdiOutput) { sdiOutput.stop(); sdiOutput = null; } return { ok: true }; });

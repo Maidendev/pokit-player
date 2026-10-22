@@ -47,6 +47,17 @@
 //     the string type it hands back (CFStringRef vs. BSTR), bool vs. BOOL in
 //     out-parameters, and how a child sees the pipes its parent gave it. All
 //     of that lives in the "Platform" section and nowhere else.
+//
+//  7. Sound rides the same clock as the picture. With --audio-channels, PCM
+//     arrives on fd 4 (48 kHz, 32-bit integer, interleaved) and is scheduled
+//     with ScheduleAudioSamples at the stream time of the frame it belongs
+//     to, exactly as ffmpeg's own DeckLink muxer does: BeginAudioPreroll,
+//     schedule, EndAudioPreroll, StartScheduledPlayback. Every frame carries
+//     its source index, so after a pause — which flushes what the card had
+//     not yet shown — the sound is re-aligned to the first frame that goes
+//     back out, and a repeated frame (underrun) gets a frame of silence so
+//     the two never drift apart. Sound that has been scheduled is kept until
+//     its picture has been SHOWN, because a flush takes it back off the card.
 
 #if defined(_WIN32)
   #include <windows.h>
@@ -79,6 +90,8 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -90,6 +103,13 @@ namespace {
 int gPoolFrames = 24;
 int prerollFrames() { return std::max(4, gPoolFrames / 2); }
 constexpr BMDPixelFormat kPixelFormat = bmdFormat10BitYUV;
+
+// Sound, when --audio-channels asks for it: 48 kHz is the only rate SDI
+// embeds, and 32-bit integer samples carry a 24-bit master without loss.
+// The card takes 2, 8 or 16 channels and nothing in between.
+int gAudioChannels = 0;                                   // 0: picture only
+constexpr BMDTimeScale kAudioRate = 48000;
+bool validAudioChannels(int n) { return n == 2 || n == 8 || n == 16; }
 
 // ---------------------------------------------------------------------------
 // Small helpers
@@ -252,6 +272,16 @@ bool readFully(int fd, void* dst, size_t n) {
   return true;
 }
 
+/** Read whatever is there, up to n bytes. 0 on EOF or error. */
+size_t readSome(int fd, void* dst, size_t n) {
+#if defined(_WIN32)
+  const int got = ::_read(fd, dst, static_cast<unsigned>(std::min<size_t>(n, 1u << 30)));
+#else
+  const ssize_t got = ::read(fd, dst, n);
+#endif
+  return got > 0 ? static_cast<size_t>(got) : 0;
+}
+
 // ---------------------------------------------------------------------------
 // Driver generations
 // ---------------------------------------------------------------------------
@@ -355,6 +385,7 @@ struct DeviceCaps {
   bool known = false;                    // VideoIOSupport was reported
   bool capture = false, playback = false;
   int64_t duplex = 0;                    // BMDDuplexMode FourCC, 0 if not reported
+  int64_t maxAudioChannels = 0;          // embedded audio channels the device can carry, 0 if not reported
 };
 
 DeviceCaps queryCaps(IDeckLink* dl) {
@@ -372,6 +403,7 @@ DeviceCaps queryCaps(IDeckLink* dl) {
     c.playback = (io & bmdDeviceSupportsPlayback) != 0;
   }
   attrs->GetInt(BMDDeckLinkDuplex, &c.duplex);
+  attrs->GetInt(BMDDeckLinkMaximumAudioChannels, &c.maxAudioChannels);
   attrs->Release();
   return c;
 }
@@ -548,8 +580,12 @@ int listDevices() {
 
     if (out) {
       ++listed;
-      std::printf("%s{\"index\":%d,\"name\":\"%s\",\"model\":\"%s\",\"modes\":[",
-                  first ? "" : ",", index, jsonEscape(name).c_str(), jsonEscape(model).c_str());
+      // maxAudioChannels is how many channels of sound the player may send
+      // with the picture; 0 when the driver would not say, and the player
+      // then settles for stereo, which every output carries.
+      std::printf("%s{\"index\":%d,\"name\":\"%s\",\"model\":\"%s\",\"maxAudioChannels\":%lld,\"modes\":[",
+                  first ? "" : ",", index, jsonEscape(name).c_str(), jsonEscape(model).c_str(),
+                  static_cast<long long>(caps.maxAudioChannels));
       first = false;
 
       IDeckLinkDisplayModeIterator* mit = nullptr;
@@ -663,9 +699,23 @@ class OutputCallback : public IDeckLinkVideoOutputCallback {
   std::atomic<ULONG> refs_;
 };
 
+/** A run of consecutive sample frames of interleaved 32-bit PCM. */
+struct AudioChunk {
+  int64_t first = 0;             // source sample-frame index of data[0]
+  int64_t frames = 0;            // sample frames in data
+  std::vector<int32_t> data;     // frames * channels values
+};
+
+/** What a frame in the pool is carrying right now. */
+struct SlotInfo {
+  uint64_t seq = 0;              // source frame index, counted as frames are read from stdin
+  bool repeat = false;           // scheduled again to cover an underrun — not a new picture
+};
+
 class Player {
  public:
-  Player(IDeckLinkOutput* out, IDeckLinkDisplayMode* mode) : out_(out), mode_(mode) {}
+  Player(IDeckLinkOutput* out, IDeckLinkDisplayMode* mode, int audioFd, int audioChannels)
+      : out_(out), mode_(mode), audioFd_(audioFd), audioChannels_(audioChannels) {}
 
   ~Player() {
     if (callback_) { out_->SetScheduledFrameCompletionCallback(nullptr); callback_->Release(); }
@@ -721,17 +771,44 @@ class Player {
       return false;
     }
 
+    // Sound is asked for after the picture is up, and a refusal is reported
+    // and survived: a screening with a silent projector is still a screening,
+    // one with a black projector is not. fd 4 is drained either way, or
+    // ffmpeg would block on its audio pipe and the picture would stop too.
+    std::string audioNote = "audio=off";
+    if (audioChannels_ > 0) {
+      if (audioFd_ < 0) {
+        fail("--audio-channels was given but there is no audio pipe on fd 4 — continuing with picture only");
+        audioNote = "audio=unavailable";
+      } else {
+        const HRESULT hr = out_->EnableAudioOutput(bmdAudioSampleRate48kHz, bmdAudioSampleType32bitInteger,
+                                                   static_cast<uint32_t>(audioChannels_), bmdAudioOutputStreamTimestamped);
+        if (hr == S_OK) {
+          audioEnabled_ = true;
+          silence_.assign(static_cast<size_t>(audioChannels_) * kSilenceFrames, 0);
+          audioNote = "audio=" + std::to_string(audioChannels_) + "ch";
+        } else {
+          std::fprintf(stderr, "sdi-out: could not enable %d-channel audio output (0x%08x) — continuing with picture only\n",
+                       audioChannels_, static_cast<unsigned>(hr));
+          std::fflush(stderr);
+          audioNote = "audio=unavailable";
+        }
+      }
+    }
+
     std::string mname;
     { BmdStr s; if (mode_->GetName(s.out()) == S_OK) mname = s.str(); }
     status("mode " + fourccToString(mode_->GetDisplayMode()) + " " + mname + " " +
            std::to_string(width_) + "x" + std::to_string(height_) +
-           " rowbytes=" + std::to_string(cardRowBytes_) + " buffer=" + std::to_string(gPoolFrames));
+           " rowbytes=" + std::to_string(cardRowBytes_) + " buffer=" + std::to_string(gPoolFrames) +
+           " " + audioNote);
     return true;
   }
 
   /** Main loop. Returns exit code. */
   int run(int controlFd) {
     reader_ = std::thread([this] { readerLoop(); });
+    if (audioFd_ >= 0) audioReader_ = std::thread([this] { audioReaderLoop(); });
 
     if (!startPlayback()) return 1;
 
@@ -758,7 +835,9 @@ class Player {
     }
 
     if (control.joinable()) { if (ctl) { /* fgets returns on close */ } control.detach(); }
-    if (reader_.joinable()) reader_.detach();   // blocked on stdin; process exit reclaims it
+    if (reader_.joinable()) reader_.detach();             // blocked on stdin; process exit reclaims it
+    if (audioReader_.joinable()) audioReader_.detach();   // likewise, on fd 4
+    if (audioEnabled_) out_->DisableAudioOutput();
     out_->DisableVideoOutput();
     status("stopped");
     return 0;
@@ -770,17 +849,31 @@ class Player {
     std::unique_lock<std::mutex> lk(mu_);
     if (result == bmdOutputFrameDropped)       ++dropped_;
     if (result == bmdOutputFrameDisplayedLate) ++late_;
+    auto* frame = static_cast<IDeckLinkMutableVideoFrame*>(completed);
+    const SlotInfo info = slot_[completed];
 
-    // Remember what is on screen so pause can hold it.
-    if (result != bmdOutputFrameFlushed) {
-      if (held_) held_->Release();
-      held_ = completed;
-      held_->AddRef();
+    if (result == bmdOutputFrameFlushed) {
+      // A stop or pause took it back before it was shown. It goes back in
+      // line, in source order, so resume carries on from the picture that
+      // was on screen rather than a few frames later — and the sound, which
+      // is re-aligned to the first frame out, stays with it. A frame that
+      // was only repeating for an underrun holds nothing new: simply free.
+      if (info.repeat) freeQ_.push_back(frame);
+      else requeueLocked(frame, info.seq);
+      cv_.notify_all();
+      return;
     }
 
+    // Shown. Remember it so pause can hold it, and let go of the sound that
+    // belonged to the pictures before it — nothing can bring those back.
+    if (held_) held_->Release();
+    held_ = completed;
+    held_->AddRef();
+    retireAudioLocked(info.seq);
+
     if (!playing_) {
-      // Flushed by a stop or pause: the frame is simply free again.
-      freeQ_.push_back(static_cast<IDeckLinkMutableVideoFrame*>(completed));
+      // Completed on its way out of a stop: the frame is simply free again.
+      freeQ_.push_back(frame);
       cv_.notify_all();
       return;
     }
@@ -788,8 +881,8 @@ class Player {
     if (!readyQ_.empty()) {
       IDeckLinkMutableVideoFrame* next = readyQ_.front();
       readyQ_.pop_front();
-      freeQ_.push_back(static_cast<IDeckLinkMutableVideoFrame*>(completed));
-      scheduleLocked(next);
+      freeQ_.push_back(frame);
+      scheduleLocked(next, false);
       cv_.notify_all();
       return;
     }
@@ -798,13 +891,14 @@ class Player {
       // Nothing more will arrive. Let the schedule drain and finish.
       uint32_t buffered = 0;
       out_->GetBufferedVideoFrameCount(&buffered);
-      freeQ_.push_back(static_cast<IDeckLinkMutableVideoFrame*>(completed));
+      freeQ_.push_back(frame);
       if (buffered == 0) {
         playing_ = false;
         lk.unlock();
         out_->StopScheduledPlayback(0, nullptr, timeScale_);
         lk.lock();
-        status("eof frames=" + std::to_string(totalScheduled_));
+        status("eof frames=" + std::to_string(totalScheduled_) +
+               (audioEnabled_ ? " audio-samples=" + std::to_string(audioScheduledTotal_) : std::string()));
         finished_ = true;
       }
       cv_.notify_all();
@@ -815,7 +909,7 @@ class Player {
     // this one again rather than let the output go black.
     ++underrunTotal_;
     if (!inUnderrun_) { inUnderrun_ = true; status("underrun"); }
-    scheduleLocked(static_cast<IDeckLinkMutableVideoFrame*>(completed));
+    scheduleLocked(frame, true);
   }
 
   void onPlaybackStopped() {
@@ -848,9 +942,47 @@ class Player {
       }
 
       std::lock_guard<std::mutex> lk(mu_);
+      slot_[f] = SlotInfo{ readSeq_++, false };
       readyQ_.push_back(f);
       if (inUnderrun_) { inUnderrun_ = false; status("recovered"); }
       cv_.notify_all();
+    }
+  }
+
+  // ---- audio reader thread: fd 4 -> chunks, kept until their picture has shown ----
+  void audioReaderLoop() {
+    const size_t bytesPerFrame = static_cast<size_t>(audioChannels_) * sizeof(int32_t);
+    const size_t chunkBytes = bytesPerFrame * kSilenceFrames;
+    std::vector<uint8_t> buf(chunkBytes);
+    size_t have = 0;
+    for (;;) {
+      const size_t got = readSome(audioFd_, buf.data() + have, chunkBytes - have);
+      have += got;
+      // Hand over whole sample frames only; a partial one waits for the rest.
+      const size_t whole = (have / bytesPerFrame) * bytesPerFrame;
+      if (whole > 0 && audioEnabled_) {
+        AudioChunk c;
+        c.frames = static_cast<int64_t>(whole / bytesPerFrame);
+        c.data.resize(static_cast<size_t>(c.frames) * static_cast<size_t>(audioChannels_));
+        std::memcpy(c.data.data(), buf.data(), whole);
+        std::lock_guard<std::mutex> lk(mu_);
+        if (finished_) return;
+        c.first = audioRead_;
+        audioRead_ += c.frames;
+        audioQ_.push_back(std::move(c));
+        if (playing_) pumpAudioLocked();
+        cv_.notify_all();
+      }
+      if (whole > 0) {
+        std::memmove(buf.data(), buf.data() + whole, have - whole);
+        have -= whole;
+      }
+      if (got == 0) {
+        std::lock_guard<std::mutex> lk(mu_);
+        audioEof_ = true;
+        cv_.notify_all();
+        return;
+      }
     }
   }
 
@@ -885,14 +1017,120 @@ class Player {
   }
 
   // ---- scheduling (mu_ held) ----
-  void scheduleLocked(IDeckLinkMutableVideoFrame* f) {
+
+  /** Sample frames of sound in this many frames of picture, from the mode's own rate. */
+  int64_t framesToSamples(uint64_t frames) const {
+    return static_cast<int64_t>((frames * static_cast<uint64_t>(frameDuration_) * static_cast<uint64_t>(kAudioRate)) /
+                                static_cast<uint64_t>(timeScale_));
+  }
+
+  void scheduleLocked(IDeckLinkMutableVideoFrame* f, bool repeat) {
     const HRESULT hr = out_->ScheduleVideoFrame(f, totalScheduled_ * frameDuration_, frameDuration_, timeScale_);
     if (hr != S_OK) {
       fail("ScheduleVideoFrame failed");
       freeQ_.push_back(f);
       return;
     }
+    slot_[f].repeat = repeat;
+    if (repeat && audioEnabled_) {
+      // The slot shows an old picture, so it gets no new sound: a frame of
+      // silence, and the source stays where it was. Without this the sound
+      // would run a frame ahead of the picture for the rest of the clip.
+      quiet_.emplace_back(framesToSamples(totalScheduled_), framesToSamples(totalScheduled_ + 1));
+    }
     ++totalScheduled_;
+    pumpAudioLocked();
+  }
+
+  /** Put a flushed frame back in line, in source order. */
+  void requeueLocked(IDeckLinkMutableVideoFrame* f, uint64_t seq) {
+    auto it = readyQ_.begin();
+    while (it != readyQ_.end() && slot_[*it].seq < seq) ++it;
+    readyQ_.insert(it, f);
+  }
+
+  /** The picture with this index has been shown; sound before it is not needed again. */
+  void retireAudioLocked(uint64_t shownSeq) {
+    if (!audioEnabled_) return;
+    const int64_t keepFrom = framesToSamples(shownSeq);
+    while (!audioQ_.empty() && audioQ_.front().first + audioQ_.front().frames <= keepFrom) audioQ_.pop_front();
+  }
+
+  /** The chunk holding source sample frame `pos`, or the first one after it, or null. */
+  const AudioChunk* chunkFrom(int64_t pos) const {
+    for (const AudioChunk& c : audioQ_) {
+      if (c.first + c.frames > pos) return &c;
+    }
+    return nullptr;
+  }
+
+  /** ScheduleAudioSamples at the current local stream time. Returns sample frames taken; 0 means try again later. */
+  uint32_t scheduleSamples(const int32_t* p, int64_t n) {
+    if (n <= 0) return 0;
+    const uint32_t count = static_cast<uint32_t>(std::min<int64_t>(n, 1 << 20));
+    uint32_t written = 0;
+    const HRESULT hr = out_->ScheduleAudioSamples(const_cast<int32_t*>(p), count, audioLocal_, kAudioRate, &written);
+    if (hr != S_OK) {
+      if (!audioScheduleWarned_) {
+        audioScheduleWarned_ = true;
+        std::fprintf(stderr, "sdi-out: ScheduleAudioSamples failed (0x%08x) — sound may drop out\n", static_cast<unsigned>(hr));
+        std::fflush(stderr);
+      }
+      return 0;
+    }
+    audioScheduledTotal_ += written;
+    return written;
+  }
+
+  uint32_t scheduleSilence(int64_t n) {
+    return scheduleSamples(silence_.data(), std::min<int64_t>(n, kSilenceFrames));
+  }
+
+  /**
+   * Keep sound scheduled exactly as far ahead as the picture: up to the end
+   * of the last video slot. Called whenever a frame is scheduled and whenever
+   * sound arrives. Local stream time (what the card is told) and the source
+   * cursor (which sample is next) move together, except across a quiet span
+   * for a repeated frame, where only stream time moves. A partial write
+   * means the card's buffer is full; the rest goes on the next tick.
+   */
+  void pumpAudioLocked() {
+    if (!audioEnabled_) return;
+    const int64_t target = framesToSamples(totalScheduled_);
+    while (audioLocal_ < target) {
+      if (!quiet_.empty() && quiet_.front().second <= audioLocal_) { quiet_.pop_front(); continue; }
+      if (!quiet_.empty() && quiet_.front().first <= audioLocal_) {
+        const uint32_t w = scheduleSilence(std::min(quiet_.front().second, target) - audioLocal_);
+        if (w == 0) return;
+        audioLocal_ += w;
+        continue;
+      }
+      int64_t limit = target;
+      if (!quiet_.empty()) limit = std::min(limit, quiet_.front().first);
+
+      const AudioChunk* c = chunkFrom(audioCursor_);
+      if (!c) {
+        if (!audioEof_) return;                   // not here yet; the next frame will ask again
+        // The sound ended before the picture did: silence from here on.
+        const uint32_t w = scheduleSilence(limit - audioLocal_);
+        if (w == 0) return;
+        audioLocal_ += w; audioCursor_ += w;
+        continue;
+      }
+      if (audioCursor_ < c->first) {
+        // A hole before the next sound — not something a healthy stream
+        // does, but filled rather than left for the card to guess at.
+        const uint32_t w = scheduleSilence(std::min(c->first - audioCursor_, limit - audioLocal_));
+        if (w == 0) return;
+        audioLocal_ += w; audioCursor_ += w;
+        continue;
+      }
+      const int64_t off = audioCursor_ - c->first;
+      const int64_t n = std::min(c->frames - off, limit - audioLocal_);
+      const uint32_t w = scheduleSamples(c->data.data() + static_cast<size_t>(off) * static_cast<size_t>(audioChannels_), n);
+      if (w == 0) return;
+      audioLocal_ += w; audioCursor_ += w;
+    }
   }
 
   bool startPlayback() {
@@ -906,15 +1144,37 @@ class Player {
       finished_ = true;
       return false;
     }
+
+    if (audioEnabled_) {
+      // Stream time 0 is the first frame about to go out — after a pause
+      // that is wherever the picture stopped — and the sound starts from
+      // the same place in the source. ffmpeg interleaves the two, but they
+      // travel on separate pipes, so give the sound a moment to catch up
+      // with the preroll; it is not waited for forever.
+      const uint64_t firstSeq = slot_[readyQ_.front()].seq;
+      const int64_t want = framesToSamples(firstSeq) + framesToSamples(static_cast<uint64_t>(prerollFrames()));
+      cv_.wait_for(lk, std::chrono::seconds(2), [this, want] { return audioRead_ >= want || audioEof_ || finished_; });
+      if (finished_) return false;
+      audioCursor_ = framesToSamples(firstSeq);
+      audioLocal_ = 0;
+      quiet_.clear();
+      if (out_->BeginAudioPreroll() != S_OK && !audioPrerollWarned_) {
+        audioPrerollWarned_ = true;
+        std::fprintf(stderr, "sdi-out: BeginAudioPreroll failed — sound may start late\n");
+        std::fflush(stderr);
+      }
+    }
+
     totalScheduled_ = 0;
     while (!readyQ_.empty()) {
       IDeckLinkMutableVideoFrame* f = readyQ_.front();
       readyQ_.pop_front();
-      scheduleLocked(f);
+      scheduleLocked(f, false);          // schedules the sound for each slot as it goes
     }
     playing_ = true;
     lk.unlock();
 
+    if (audioEnabled_) out_->EndAudioPreroll();
     if (out_->StartScheduledPlayback(0, timeScale_, 1.0) != S_OK) {
       fail("StartScheduledPlayback failed");
       std::lock_guard<std::mutex> g(mu_);
@@ -937,6 +1197,9 @@ class Player {
       if (hold) hold->AddRef();
     }
     out_->StopScheduledPlayback(0, nullptr, timeScale_);
+    // Scheduled sound that has not played is flushed with the frames; the
+    // chunks it came from are still held and go out again on resume.
+    if (audioEnabled_) out_->FlushBufferedAudioSamples();
     // Keep the picture up rather than dropping to black.
     if (hold) { out_->DisplayVideoFrameSync(hold); hold->Release(); }
     status("paused");
@@ -948,6 +1211,7 @@ class Player {
       playing_ = false;
     }
     out_->StopScheduledPlayback(0, nullptr, timeScale_);
+    if (audioEnabled_) out_->FlushBufferedAudioSamples();
     std::lock_guard<std::mutex> lk(mu_);
     finished_ = true;
     cv_.notify_all();
@@ -972,18 +1236,36 @@ class Player {
   std::vector<IDeckLinkMutableVideoFrame*> pool_;
   std::deque<IDeckLinkMutableVideoFrame*> freeQ_;
   std::deque<IDeckLinkMutableVideoFrame*> readyQ_;
+  std::unordered_map<IDeckLinkVideoFrame*, SlotInfo> slot_;   // what each pooled frame holds
   IDeckLinkVideoFrame* held_ = nullptr;
 
   std::mutex mu_;
   std::condition_variable cv_;
   std::thread reader_;
+  std::thread audioReader_;
 
   bool playing_ = false;
   bool eof_ = false;
   bool finished_ = false;
   bool inUnderrun_ = false;
-  uint64_t totalScheduled_ = 0;
+  uint64_t readSeq_ = 0;                 // source index of the next frame read from stdin
+  uint64_t totalScheduled_ = 0;          // slots scheduled since the clock last started
   uint64_t underrunTotal_ = 0, dropped_ = 0, late_ = 0;
+
+  // ---- sound ----
+  static constexpr int64_t kSilenceFrames = 4096;   // one read, and the most silence scheduled per call
+  int audioFd_ = -1;
+  int audioChannels_ = 0;
+  bool audioEnabled_ = false;            // the card accepted EnableAudioOutput
+  bool audioEof_ = false;
+  bool audioPrerollWarned_ = false, audioScheduleWarned_ = false;
+  std::deque<AudioChunk> audioQ_;        // contiguous, ascending; kept until the picture has shown
+  int64_t audioRead_ = 0;                // source sample frames read so far
+  int64_t audioCursor_ = 0;              // next source sample frame to schedule
+  int64_t audioLocal_ = 0;               // stream time scheduled so far this run, in sample frames
+  std::deque<std::pair<int64_t, int64_t>> quiet_;   // [from, to) spans of local stream time that are silent
+  std::vector<int32_t> silence_;         // kSilenceFrames of zeros, audioChannels_ wide
+  uint64_t audioScheduledTotal_ = 0;
 };
 
 HRESULT STDMETHODCALLTYPE OutputCallback::ScheduledFrameCompleted(IDeckLinkVideoFrame* f, BMDOutputFrameCompletionResult r) {
@@ -999,7 +1281,7 @@ HRESULT STDMETHODCALLTYPE OutputCallback::ScheduledPlaybackHasStopped() {
 // --play
 // ---------------------------------------------------------------------------
 
-int play(int deviceIndex, const std::string& modeId, int controlFd) {
+int play(int deviceIndex, const std::string& modeId, int controlFd, int audioFd) {
   IDeckLinkIterator* it = createIterator();
   if (!it) {
     fail("Desktop Video is not installed, so there is no device to play to");
@@ -1065,7 +1347,7 @@ int play(int deviceIndex, const std::string& modeId, int controlFd) {
 
   int rc = 1;
   {
-    Player player(out, mode);
+    Player player(out, mode, audioFd, gAudioChannels);
     if (player.setup()) rc = player.run(controlFd);
   }
 
@@ -1083,11 +1365,14 @@ void usage() {
     "      JSON array of output-capable devices and the progressive modes each\n"
     "      can drive at 10-bit YUV over SDI. [] when Desktop Video is absent.\n"
     "\n"
-    "  sdi-out --play --device N --mode XXXX [--buffer-frames 24]\n"
+    "  sdi-out --play --device N --mode XXXX [--buffer-frames 24] [--audio-channels 2|8|16]\n"
     "      Read v210 frames on stdin and schedule them to device N in display\n"
     "      mode XXXX (a four-character id from --list-devices). Control lines\n"
     "      on fd 3: play | pause | stop. Status lines on stderr: status:...\n"
-    "      --buffer-frames sets the on-card cushion (default 24, min 4).\n");
+    "      --buffer-frames sets the on-card cushion (default 24, min 4).\n"
+    "      --audio-channels embeds sound read from fd 4: 48 kHz, 32-bit signed\n"
+    "      little-endian integer PCM, interleaved, that many channels, in step\n"
+    "      with the frames on stdin from the same start point.\n");
 }
 
 }  // namespace
@@ -1116,12 +1401,21 @@ int main(int argc, const char* argv[]) {
       if (a == "--device" && has)    device = std::atoi(argv[++i]);
       else if (a == "--mode" && has) mode = argv[++i];
       else if (a == "--buffer-frames" && has) gPoolFrames = std::max(4, std::atoi(argv[++i]));
+      else if (a == "--audio-channels" && has) gAudioChannels = std::atoi(argv[++i]);
       else { fail("unrecognised argument '" + a + "'"); return 2; }
     }
     if (device < 0 || mode.size() != 4) { usage(); return 2; }
-    // fd 3 is the control channel if the parent opened one.
+    if (gAudioChannels != 0 && !validAudioChannels(gAudioChannels)) {
+      fail("--audio-channels must be 2, 8 or 16 — the counts SDI embedded audio comes in");
+      return 2;
+    }
+    // fd 3 is the control channel if the parent opened one; fd 4 the sound.
     const int controlFd = fdExists(3) ? 3 : -1;
-    return play(device, mode, controlFd);
+    const int audioFd = (gAudioChannels > 0 && fdExists(4)) ? 4 : -1;
+#if defined(_WIN32)
+    if (audioFd >= 0) ::_setmode(audioFd, _O_BINARY);   // raw samples, same as stdin
+#endif
+    return play(device, mode, controlFd, audioFd);
   }
 
   usage();
