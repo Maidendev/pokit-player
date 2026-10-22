@@ -445,7 +445,8 @@ async function describeSource(source) {
       intraOnly: true,
       losslessPossible: false,   // stills → movie is always an encode
       container: null,
-      startTimecode: null,
+      // A sequence has no embedded TC; the player may still assign one.
+      startTimecode: source.startTimecode || null,
     };
   }
 
@@ -462,7 +463,9 @@ async function describeSource(source) {
     intraOnly,
     losslessPossible: true,
     container: insp.container,
-    startTimecode: insp.container.startTimecode || null,
+    // Edit > Set Start Timecode... in the player sends its own start TC on the
+    // source; it wins over the embedded one so cuts are stamped from it.
+    startTimecode: source.startTimecode || insp.container.startTimecode || null,
     ext: path.extname(source.path).toLowerCase(),
   };
 }

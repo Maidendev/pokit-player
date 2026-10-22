@@ -1212,6 +1212,46 @@ body:-webkit-full-screen #controls-bar {
   border-color: var(--accent);
 }
 
+/* Set Start Timecode dialog shares the sequence-dialog look */
+#tc-start-dialog {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.7);
+  z-index: 60;
+  backdrop-filter: blur(6px);
+}
+
+#tc-start-dialog.hidden {
+  display: none;
+}
+
+.seq-fps-row input[type="text"] {
+  flex: 1;
+  padding: 8px 12px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  color: var(--text-primary);
+  font-size: 15px;
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  letter-spacing: 1px;
+  outline: none;
+  transition: border-color var(--transition-fast);
+}
+
+.seq-fps-row input[type="text"]:focus {
+  border-color: var(--accent);
+}
+
+.tc-start-error {
+  color: #e5484d;
+  font-size: 12px;
+  margin: -12px 0 16px;
+}
+
 .seq-dialog-buttons {
   display: flex;
   justify-content: flex-end;

@@ -23,6 +23,14 @@ A professional, cross-platform desktop video player built with Electron. Feature
 - Real-time HH:MM:SS:FF timecode (Hours:Minutes:Seconds:Frames)
 - Frame-accurate updates using `requestVideoFrameCallback` API
 - Automatic frame rate detection with snapping to common rates (23.976, 24, 25, 29.97, 30, 60 fps)
+- **Set Start Timecode** (Edit menu, `Cmd/Ctrl+Shift+T`) overrides the embedded source
+  timecode, or gives a file that has none a start such as `01:00:00:00`. Frame rate and
+  playback are untouched; the running display, In/Out, markers, marker exports and the
+  timecode stamped into trims and joins all read from the new start. **Use Source TC**
+  in the dialog puts the file's own timecode back.
+- Timecode is counted in frames at the nominal rate (SMPTE non-drop), so `01:00:00:00` is
+  exact at 23.976 and 29.97. A start written with a semicolon (`01:00:00;00`) at 29.97 or
+  59.94 is displayed as drop-frame.
 
 #### Window Size Options
 - **Quarter Size (25%)** — Resize window to 25% of video resolution (`⌘1` / `Ctrl+1`)

@@ -82,6 +82,13 @@
   const seqInfoText = document.getElementById('seq-info-text');
   const seqBtnRender = document.getElementById('seq-btn-render');
   const seqBtnCancel = document.getElementById('seq-btn-cancel');
+  const tcStartDialog = document.getElementById('tc-start-dialog');
+  const tcStartInfo = document.getElementById('tc-start-info');
+  const tcStartInput = document.getElementById('tc-start-input');
+  const tcStartError = document.getElementById('tc-start-error');
+  const tcStartReset = document.getElementById('tc-start-reset');
+  const tcStartCancel = document.getElementById('tc-start-cancel');
+  const tcStartApply = document.getElementById('tc-start-apply');
 
   // ─── State ────────────────────────────────────────────
   let currentFilePath = null;
@@ -104,8 +111,17 @@
   let shuttleLastTs = null;
 
   // ─── Source Timecode Offset (v1.1.1) ───────────────────
-  let sourceTimecodeOffset = 0;   // Offset in seconds from embedded timecode
-  let sourceTimecodeStr = null;   // Original timecode string e.g. "01:00:00:00"
+  // The timecode of the first frame, e.g. "01:00:00:00" (";" before the frames
+  // means drop-frame). Every timecode the UI shows is this plus the media time
+  // counted in FRAMES, never in seconds: at 23.976 or 29.97 an hour of
+  // timecode is not an hour of real time, and a seconds offset would show
+  // 01:00:00:09 for a file that starts at 01:00:00:00.
+  let sourceTimecodeStr = null;
+  // Edit > Set Start Timecode... overrides it for the whole movie (display,
+  // markers, In/Out, exports). The probe's own value is kept so "Use Source
+  // TC" can put it back.
+  let probeTimecodeStr = null;
+  let startTimecodeOverride = null;   // the user's start TC string, or null
 
   // ─── MSE Streaming State (v1.1.0) ─────────────────────
   let streamMode = false;           // true when using MSE streaming playback
@@ -133,26 +149,68 @@
 
   // ─── Utility Functions ────────────────────────────────
 
-  function secondsToTimecode(seconds, fps) {
+  /**
+   * Media time → timecode. The time is counted in frames and the hours,
+   * minutes and seconds come from that frame count at the nominal rate
+   * (24 for 23.976, 30 for 29.97), which is what timecode is: at 23.976
+   * a "second" of timecode is 24 frames, not one real second.
+   * `offsetFrames` is the start timecode in frames; `dropFrame` formats
+   * the result with the SMPTE drop rule (29.97 / 59.94 only).
+   */
+  function secondsToTimecode(seconds, fps, offsetFrames, dropFrame) {
     if (isNaN(seconds) || seconds < 0) seconds = 0;
-    const roundedFps = Math.round(fps);
+    const nominal = Math.round(fps) || 24;
     // A frame boundary computed as n / fps comes back as (n - 1e-14) once
-    // multiplied out again, and floor() then reports the frame BEFORE it —
-    // so the same In point could read 04:04 in one place and 04:05 in
-    // another. The epsilon is far below a frame and removes the ambiguity.
-    const totalFrames = Math.floor(seconds * fps + 1e-6);
-    const ff = totalFrames % roundedFps;
-    const totalSeconds = Math.floor(seconds);
-    const ss = totalSeconds % 60;
-    const mm = Math.floor(totalSeconds / 60) % 60;
-    const hh = Math.floor(totalSeconds / 3600);
+    // multiplied out again, and the <video> element reports currentTime a few
+    // microseconds under the frame it is actually showing, so floor() would
+    // name the frame BEFORE it: the reader would say :12 while the In point
+    // on the same frame says :13. A tolerance of a thousandth of a frame is
+    // far above that noise and far below a frame.
+    const totalFrames = Math.floor(seconds * fps + 1e-3) + (offsetFrames || 0);
+    return framesToTc(totalFrames, nominal, !!dropFrame);
+  }
 
-    return (
-      String(hh).padStart(2, '0') + ':' +
-      String(mm).padStart(2, '0') + ':' +
-      String(ss).padStart(2, '0') + ':' +
-      String(Math.floor(ff)).padStart(2, '0')
-    );
+  const TC_RE = /^(\d{1,2})[:;](\d{2})[:;](\d{2})([:;])(\d{2})$/;
+
+  /** HH:MM:SS:FF → frame count at the nominal rate (SMPTE drop rule when asked). */
+  function tcToFrames(hh, mm, ss, ff, nominal, dropFrame) {
+    let frames = ((hh * 60 + mm) * 60 + ss) * nominal + ff;
+    if (dropFrame) {
+      const dropPerMinute = nominal === 60 ? 4 : 2;   // 29.97 drops 2, 59.94 drops 4
+      const totalMinutes = hh * 60 + mm;
+      frames -= dropPerMinute * (totalMinutes - Math.floor(totalMinutes / 10));
+    }
+    return frames;
+  }
+
+  /** Frame count → HH:MM:SS:FF (HH:MM:SS;FF when drop-frame). Same rule as src/editor.js. */
+  function framesToTc(frames, nominal, dropFrame) {
+    let f = Math.max(0, frames);
+    if (dropFrame) {
+      const dropPerMinute = nominal === 60 ? 4 : 2;
+      const framesPer10Min = nominal * 600 - dropPerMinute * 9;
+      const framesPerMin = nominal * 60 - dropPerMinute;
+      const tenMin = Math.floor(f / framesPer10Min);
+      let rem = f % framesPer10Min;
+      if (rem >= dropPerMinute) rem += dropPerMinute * Math.floor((rem - dropPerMinute) / framesPerMin);
+      f = tenMin * framesPer10Min + rem + dropPerMinute * 9 * tenMin;
+    }
+    const ff = f % nominal;
+    const totalSec = Math.floor(f / nominal);
+    const ss = totalSec % 60;
+    const mm = Math.floor(totalSec / 60) % 60;
+    const hh = Math.floor(totalSec / 3600) % 24;
+    const p = (n) => String(n).padStart(2, '0');
+    return p(hh) + ':' + p(mm) + ':' + p(ss) + (dropFrame ? ';' : ':') + p(ff);
+  }
+
+  /** The current start timecode as a frame offset at `fps`, plus its drop-frame flag. */
+  function tcStart(fps) {
+    const m = TC_RE.exec(sourceTimecodeStr || '');
+    if (!m) return { frames: 0, drop: false };
+    const nominal = Math.round(fps) || 24;
+    const drop = m[4] === ';' && (nominal === 30 || nominal === 60);
+    return { frames: tcToFrames(+m[1], +m[2], +m[3], +m[5], nominal, drop), drop };
   }
 
   function formatFileSize(bytes) {
@@ -251,6 +309,106 @@
   }
 
   seqBtnCancel.addEventListener('click', hideSequenceDialog);
+
+  // ─── Set Start Timecode (Edit menu) ───────────────────
+  // The movie keeps its frame rate and plays exactly the same; only the
+  // timecode it is read from changes. Everything that shows or writes a
+  // timecode goes through tcOf() and sourceTimecodeStr, so the override is
+  // one assignment plus a refresh of what is on screen.
+
+  /**
+   * Parse what the user typed into a canonical HH:MM:SS:FF string. Accepts
+   * "01:00:00:00", "01;00;00;00" (drop-frame, kept when the rate is 29.97 or
+   * 59.94), "1:00:00:00", "01000000" (digits only, right-aligned) or
+   * "01:00:00" (frames assumed 00). Returns null when it is not a timecode.
+   */
+  function parseStartTimecode(text, fps) {
+    const raw = String(text || '').trim();
+    if (!raw) return null;
+    const nominal = Math.round(fps) || 24;
+    let parts, drop = false;
+    if (/^\d+$/.test(raw)) {
+      // Bare digits fill from the right, frames first: 100 -> 00:00:01:00
+      const d = raw.padStart(8, '0').slice(-8);
+      parts = [d.slice(0, 2), d.slice(2, 4), d.slice(4, 6), d.slice(6, 8)];
+    } else {
+      parts = raw.split(/[:;.]/);
+      if (parts.length === 3) parts.push('00');
+      if (parts.length !== 4 || parts.some((x) => !/^\d{1,2}$/.test(x))) return null;
+      drop = /;\d{1,2}$/.test(raw) && (nominal === 30 || nominal === 60);
+    }
+    const [hh, mm, ss, ff] = parts.map((x) => parseInt(x, 10));
+    if (hh > 23 || mm > 59 || ss > 59 || ff >= nominal) return null;
+    // Drop-frame skips frames 00 and 01 at the top of every minute not divisible by 10
+    if (drop && ss === 0 && mm % 10 !== 0 && ff < (nominal === 60 ? 4 : 2)) return null;
+    const p = (n) => String(n).padStart(2, '0');
+    return { str: p(hh) + ':' + p(mm) + ':' + p(ss) + (drop ? ';' : ':') + p(ff) };
+  }
+
+  /** Repaint every place a timecode is shown after the start TC changes. */
+  function refreshTimecodeEverywhere() {
+    updateTimecode();
+    updateSelectionUI();
+    renderTimelineMarkers();
+    renderMarkersPanel();
+    renderMarkersPanelActive();
+    updateFileInfoFromVideo();
+  }
+
+  /** Apply a new start TC (a parsed { str }) or null to go back to the source's. */
+  function applyStartTimecode(parsed) {
+    if (parsed) {
+      startTimecodeOverride = parsed.str;
+      sourceTimecodeStr = parsed.str;
+    } else {
+      startTimecodeOverride = null;
+      sourceTimecodeStr = probeTimecodeStr;
+    }
+    console.log('[Renderer] Start timecode now', sourceTimecodeStr || '(none)');
+    refreshTimecodeEverywhere();
+  }
+
+  function openStartTimecodeDialog() {
+    if (!hasVideoLoaded) { alert('Open a movie first.'); return; }
+    const fpsLabel = frameRate ? (Math.round(frameRate * 1000) / 1000) + ' fps' : 'unknown rate';
+    tcStartInfo.textContent = (probeTimecodeStr
+      ? 'The file carries ' + probeTimecodeStr + '. '
+      : 'The file carries no timecode, so it reads from 00:00:00:00. ') +
+      'Enter the timecode the first frame should have (' + fpsLabel + '). Frame rate and playback are unchanged.';
+    tcStartInput.value = sourceTimecodeStr || '00:00:00:00';
+    tcStartError.classList.add('hidden');
+    tcStartReset.disabled = !startTimecodeOverride;
+    tcStartDialog.classList.remove('hidden');
+    tcStartInput.focus();
+    tcStartInput.select();
+  }
+
+  function hideStartTimecodeDialog() {
+    tcStartDialog.classList.add('hidden');
+  }
+
+  function submitStartTimecode() {
+    const parsed = parseStartTimecode(tcStartInput.value, frameRate);
+    if (!parsed) {
+      tcStartError.textContent = 'Enter a timecode as HH:MM:SS:FF. Frames must be below ' + (Math.round(frameRate) || 24) + '.';
+      tcStartError.classList.remove('hidden');
+      tcStartInput.focus();
+      return;
+    }
+    hideStartTimecodeDialog();
+    applyStartTimecode(parsed);
+  }
+
+  tcStartApply.addEventListener('click', submitStartTimecode);
+  tcStartCancel.addEventListener('click', hideStartTimecodeDialog);
+  tcStartReset.addEventListener('click', () => { hideStartTimecodeDialog(); applyStartTimecode(null); });
+  tcStartInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); submitStartTimecode(); }
+    else if (e.key === 'Escape') { e.preventDefault(); hideStartTimecodeDialog(); }
+    e.stopPropagation();   // keep J/K/L, space and arrows from reaching the transport
+  });
+  tcStartInput.addEventListener('input', () => tcStartError.classList.add('hidden'));
+  tcStartDialog.addEventListener('click', (e) => { if (e.target === tcStartDialog) hideStartTimecodeDialog(); });
   seqBtnRender.addEventListener('click', async () => {
     if (!pendingSequenceInfo) return;
     const fps = parseFloat(seqFpsSelect.value);
@@ -794,9 +952,10 @@
     currentProbeInfo = null;
     wasTranscoded = false;
 
-    // Reset source timecode offset
-    sourceTimecodeOffset = 0;
+    // Reset the start timecode (and any user override: it belongs to the file)
     sourceTimecodeStr = null;
+    probeTimecodeStr = null;
+    startTimecodeOverride = null;
 
     // Clean up any previous MSE session
     cleanupMSE();
@@ -845,8 +1004,8 @@
     // Extract source timecode offset (v1.1.1)
     if (probe.sourceTimecode) {
       sourceTimecodeStr = probe.sourceTimecode;
-      sourceTimecodeOffset = probe.sourceTimecodeSeconds || 0;
-      console.log('[Renderer] Source timecode:', sourceTimecodeStr, '→ offset:', sourceTimecodeOffset, 's');
+      probeTimecodeStr = sourceTimecodeStr;
+      console.log('[Renderer] Source timecode:', sourceTimecodeStr);
     }
 
     if (probe.needsTranscode) {
@@ -1088,8 +1247,11 @@
   function frameStep(direction) {
     if (!hasVideoLoaded) return;
     stopShuttle();
-    const step = direction * frameDuration;
-    seekTo(video.currentTime + step);
+    // Step by frame INDEX, not by adding a duration: currentTime comes back
+    // a few microseconds short of the frame, and summing those errors walks
+    // the playhead off the frame grid within a few presses.
+    const frame = Math.floor(video.currentTime * frameRate + 1e-3);
+    seekTo(Math.max(0, frame + direction) / frameRate);
   }
 
   // ─── JKL Shuttle (Premiere/FCP-style J/K/L) ────────────
@@ -1263,10 +1425,10 @@
 
   function updateTimecode() {
     // Apply source timecode offset so display shows the actual source TC
-    timecodeCurrent.textContent = secondsToTimecode(video.currentTime + sourceTimecodeOffset, frameRate);
+    timecodeCurrent.textContent = tcOf(video.currentTime);
     const duration = (currentProbeInfo && currentProbeInfo.duration) || video.duration;
     if (!isNaN(duration) && duration > 0) {
-      timecodeTotal.textContent = secondsToTimecode(duration + sourceTimecodeOffset, frameRate);
+      timecodeTotal.textContent = tcOf(duration);
     }
   }
 
@@ -1402,7 +1564,7 @@
     const pos = getTimelinePosition(e);
     const time = pos * duration;
     // Apply source timecode offset to tooltip
-    timelineTooltip.textContent = secondsToTimecode(time + sourceTimecodeOffset, frameRate);
+    timelineTooltip.textContent = tcOf(time);
     timelineTooltip.style.left = (e.clientX - timelineContainer.getBoundingClientRect().left) + 'px';
     timelineTooltip.classList.remove('hidden');
   });
@@ -2092,8 +2254,11 @@
       addInfoRow(videoGrid, 'Bitrate', Math.round(probe.bitrate) + ' kb/s');
     }
 
-    // Source timecode (v1.1.1)
-    if (sourceTimecodeStr) {
+    // Source timecode (v1.1.1), or the user's override from Edit > Set Start Timecode...
+    if (startTimecodeOverride) {
+      addInfoRow(videoGrid, 'Start TC (set by you)', startTimecodeOverride);
+      if (probeTimecodeStr) addInfoRow(videoGrid, 'Source TC Start', probeTimecodeStr);
+    } else if (sourceTimecodeStr) {
       addInfoRow(videoGrid, 'Source TC Start', sourceTimecodeStr);
     }
 
@@ -2929,7 +3094,8 @@
 
   /** Source timecode of a media time, as shown everywhere else in the UI. */
   function tcOf(t) {
-    return secondsToTimecode(t + sourceTimecodeOffset, frameRate);
+    const start = tcStart(frameRate);
+    return secondsToTimecode(t, frameRate, start.frames, start.drop);
   }
 
   /** Timecode made safe for a filename: 01:00:04:12 → 01.00.04.12 */
@@ -2975,10 +3141,12 @@
         count: currentSeqInfo.count,
         fps: frameRate,
         path: currentSeqInfo.sampleFile,
+        startTimecode: startTimecodeOverride || undefined,
       };
     }
     if (!originalFilePath) { alert('Open a movie first.'); return null; }
-    return { path: originalFilePath, fps: frameRate };
+    // A user-set start TC rides along so cuts are stamped from it, not the embedded one.
+    return { path: originalFilePath, fps: frameRate, startTimecode: startTimecodeOverride || undefined };
   }
 
   /** Where new files default to: next to the source, named after it. */
@@ -4301,6 +4469,7 @@
       case 'export-markers': exportMarkers(); break;
       case 'clear-markers': clearMarkers(); break;
       case 'toggle-look-panel': toggleLookPanel(payload); break;
+      case 'set-start-timecode': openStartTimecodeDialog(); break;
       default: console.warn('[Edit] Unknown command:', name);
     }
   });

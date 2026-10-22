@@ -468,6 +468,10 @@ function buildMenu() {
         { label: 'Clear In and Out', accelerator: 'CmdOrCtrl+Shift+X', click: () => sendEdit('clear-in-out') },
         { label: 'Play In to Out', click: () => sendEdit('play-selection') },
         { type: 'separator' },
+        // ── Start timecode: override the embedded (or missing) source TC so the
+        // whole movie — display, markers, In/Out, exports — reads from a new start.
+        { label: 'Set Start Timecode…', accelerator: 'CmdOrCtrl+Shift+T', click: () => sendEdit('set-start-timecode') },
+        { type: 'separator' },
         { label: 'Trim to Selection…', click: () => sendEdit('export', { range: 'selection', title: 'Trim to Selection' }) },
         { label: 'Delete Selection…', click: () => sendEdit('delete-selection') },
         { label: 'Copy Selection to Clip Bin', accelerator: 'CmdOrCtrl+B', click: () => sendEdit('copy-selection') },

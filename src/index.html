@@ -121,6 +121,24 @@
         </div>
       </div>
 
+      <!-- Set Start Timecode: override the source TC the whole movie reads from -->
+      <div id="tc-start-dialog" class="hidden">
+        <div class="seq-dialog-box">
+          <h3>Set Start Timecode</h3>
+          <p id="tc-start-info">The movie keeps its frame rate and plays the same; only the timecode it reads from changes.</p>
+          <div class="seq-fps-row">
+            <label for="tc-start-input">Start TC:</label>
+            <input id="tc-start-input" type="text" inputmode="numeric" spellcheck="false" autocomplete="off" placeholder="01:00:00:00" maxlength="11">
+          </div>
+          <p id="tc-start-error" class="tc-start-error hidden"></p>
+          <div class="seq-dialog-buttons">
+            <button id="tc-start-reset" class="seq-btn seq-btn-secondary">Use Source TC</button>
+            <button id="tc-start-cancel" class="seq-btn seq-btn-secondary">Cancel</button>
+            <button id="tc-start-apply" class="seq-btn seq-btn-primary">Apply</button>
+          </div>
+        </div>
+      </div>
+
       <!-- Export / Trim dialog: range + format, then a Save As -->
       <div id="export-dialog" class="hidden">
         <div class="seq-dialog-box export-box">
