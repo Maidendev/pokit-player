@@ -46,11 +46,13 @@ let device = -1;
 let modeId = null;
 let bufferFrames = 24;
 let audioChannels = 0;
+let audioDepth = 16;
 for (let i = 1; i < args.length; i++) {
   if (args[i] === '--device') device = Number(args[++i]);
   else if (args[i] === '--mode') modeId = args[++i];
   else if (args[i] === '--buffer-frames') bufferFrames = Math.max(4, Number(args[++i]));
   else if (args[i] === '--audio-channels') audioChannels = Number(args[++i]);
+  else if (args[i] === '--audio-depth') audioDepth = Number(args[++i]);
 }
 // Same cushion policy as the real helper: preroll half, hold up to all.
 const PREROLL = Math.max(4, Math.floor(bufferFrames / 2));
@@ -63,11 +65,15 @@ if (audioChannels && ![2, 8, 16].includes(audioChannels)) {
   process.stderr.write('stub sdi-out: --audio-channels must be 2, 8 or 16\n');
   process.exit(2);
 }
+if (![16, 32].includes(audioDepth)) {
+  process.stderr.write('stub sdi-out: --audio-depth must be 16 or 32\n');
+  process.exit(2);
+}
 
 const frameBytes = v210RowBytes(mode.width) * mode.height;
 const frameMs = 1000 / mode.fps;
 status('mode ' + mode.id + ' ' + mode.name + ' ' + mode.width + 'x' + mode.height + ' rowbytes=' + v210RowBytes(mode.width) +
-       ' buffer=' + bufferFrames + (audioChannels ? ' audio=' + audioChannels + 'ch' : ' audio=off'));
+       ' buffer=' + bufferFrames + (audioChannels ? ' audio=' + audioChannels + 'ch/' + audioDepth + 'bit' : ' audio=off'));
 
 let pending = 0;          // bytes received but not yet a whole frame
 let buffered = 0;         // whole frames waiting to be "displayed"
@@ -77,7 +83,7 @@ let playing = false;
 let eof = false;
 let started = false;
 let audioBytes = 0;       // sound received on fd 4 — counted, as the card would embed it
-const audioSamples = () => (audioChannels ? Math.floor(audioBytes / (4 * audioChannels)) : 0);
+const audioSamples = () => (audioChannels ? Math.floor(audioBytes / ((audioDepth / 8) * audioChannels)) : 0);
 
 process.stdin.on('data', (chunk) => {
   pending += chunk.length;

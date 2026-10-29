@@ -115,11 +115,16 @@ int prerollFrames() { return std::max(4, gPoolFrames / 2); }
 constexpr BMDPixelFormat kPixelFormat = bmdFormat10BitYUV;
 
 // Sound, when --audio-channels asks for it: 48 kHz is the only rate SDI
-// embeds, and 32-bit integer samples carry a 24-bit master without loss.
-// The card takes 2, 8 or 16 channels and nothing in between.
+// embeds. The card takes 2, 8 or 16 channels and nothing in between, and
+// 16- or 32-bit integer samples. 16-bit is the default because it is what
+// ffmpeg's own DeckLink output and every Blackmagic sample use — the most
+// exercised path through the driver; --audio-depth 32 carries a 24-bit
+// master without loss.
 int gAudioChannels = 0;                                   // 0: picture only
+int gAudioDepth = 16;
 constexpr BMDTimeScale kAudioRate = 48000;
 bool validAudioChannels(int n) { return n == 2 || n == 8 || n == 16; }
+bool validAudioDepth(int n)    { return n == 16 || n == 32; }
 
 // ---------------------------------------------------------------------------
 // Small helpers
@@ -709,11 +714,11 @@ class OutputCallback : public IDeckLinkVideoOutputCallback {
   std::atomic<ULONG> refs_;
 };
 
-/** A run of consecutive sample frames of interleaved 32-bit PCM. */
+/** A run of consecutive sample frames of interleaved integer PCM, as bytes. */
 struct AudioChunk {
   int64_t first = 0;             // source sample-frame index of data[0]
   int64_t frames = 0;            // sample frames in data
-  std::vector<int32_t> data;     // frames * channels values
+  std::vector<uint8_t> data;     // frames * channels * (depth / 8) bytes
 };
 
 /** What a frame in the pool is carrying right now. */
@@ -724,8 +729,9 @@ struct SlotInfo {
 
 class Player {
  public:
-  Player(IDeckLinkOutput* out, IDeckLinkDisplayMode* mode, int audioFd, int audioChannels)
-      : out_(out), mode_(mode), audioFd_(audioFd), audioChannels_(audioChannels) {}
+  Player(IDeckLinkOutput* out, IDeckLinkDisplayMode* mode, int audioFd, int audioChannels, int audioDepth)
+      : out_(out), mode_(mode), audioFd_(audioFd), audioChannels_(audioChannels), audioDepth_(audioDepth),
+        bytesPerSampleFrame_(static_cast<size_t>(audioChannels) * static_cast<size_t>(audioDepth / 8)) {}
 
   ~Player() {
     if (callback_) { out_->SetScheduledFrameCompletionCallback(nullptr); callback_->Release(); }
@@ -790,19 +796,12 @@ class Player {
       if (audioFd_ < 0) {
         fail("--audio-channels was given but there is no audio pipe on fd 4 — continuing with picture only");
         audioNote = "audio=unavailable";
+      } else if (enableAudioOutput()) {
+        audioEnabled_ = true;
+        silence_.assign(bytesPerSampleFrame_ * static_cast<size_t>(kSilenceFrames), 0);
+        audioNote = "audio=" + std::to_string(audioChannels_) + "ch/" + std::to_string(audioDepth_) + "bit";
       } else {
-        const HRESULT hr = out_->EnableAudioOutput(bmdAudioSampleRate48kHz, bmdAudioSampleType32bitInteger,
-                                                   static_cast<uint32_t>(audioChannels_), bmdAudioOutputStreamTimestamped);
-        if (hr == S_OK) {
-          audioEnabled_ = true;
-          silence_.assign(static_cast<size_t>(audioChannels_) * kSilenceFrames, 0);
-          audioNote = "audio=" + std::to_string(audioChannels_) + "ch";
-        } else {
-          std::fprintf(stderr, "sdi-out: could not enable %d-channel audio output (0x%08x) — continuing with picture only\n",
-                       audioChannels_, static_cast<unsigned>(hr));
-          std::fflush(stderr);
-          audioNote = "audio=unavailable";
-        }
+        audioNote = "audio=unavailable";
       }
     }
 
@@ -863,7 +862,7 @@ class Player {
       std::unique_lock<std::mutex> lk(mu_);
       reportLocked(lk, true);
     }
-    if (audioEnabled_) out_->DisableAudioOutput();
+    disableAudioOutput();
     out_->DisableVideoOutput();
     status("stopped");
     return 0;
@@ -881,13 +880,12 @@ class Player {
 
     if (result == bmdOutputFrameFlushed) {
       ++flushedTotal_;
-      // A stop or pause took it back before it was shown. It goes back in
-      // line, in source order, so resume carries on from the picture that
-      // was on screen rather than a few frames later — and the sound, which
-      // is re-aligned to the first frame out, stays with it. A frame that
-      // was only repeating for an underrun holds nothing new: simply free.
-      if (info.repeat) freeQ_.push_back(frame);
-      else requeueLocked(frame, info.seq);
+      // A stop or pause took it back before it was shown: the frame is
+      // simply free again, as it always was. Resume prerolls fresh frames,
+      // so a few skip — accepted, because this is the path a card has been
+      // seen to play, and the sound re-aligns to whatever frame goes out
+      // first (its index is what matters, not whether it was flushed).
+      freeQ_.push_back(frame);
       cv_.notify_all();
       return;
     }
@@ -979,8 +977,8 @@ class Player {
 
   // ---- audio reader thread: fd 4 -> chunks, kept until their picture has shown ----
   void audioReaderLoop() {
-    const size_t bytesPerFrame = static_cast<size_t>(audioChannels_) * sizeof(int32_t);
-    const size_t chunkBytes = bytesPerFrame * kSilenceFrames;
+    const size_t bytesPerFrame = bytesPerSampleFrame_;
+    const size_t chunkBytes = bytesPerFrame * static_cast<size_t>(kSilenceFrames);
     std::vector<uint8_t> buf(chunkBytes);
     size_t have = 0;
     for (;;) {
@@ -991,8 +989,7 @@ class Player {
       if (whole > 0 && audioEnabled_) {
         AudioChunk c;
         c.frames = static_cast<int64_t>(whole / bytesPerFrame);
-        c.data.resize(static_cast<size_t>(c.frames) * static_cast<size_t>(audioChannels_));
-        std::memcpy(c.data.data(), buf.data(), whole);
+        c.data.assign(buf.data(), buf.data() + whole);
         std::lock_guard<std::mutex> lk(mu_);
         if (finished_) return;
         c.first = audioRead_;
@@ -1069,11 +1066,33 @@ class Player {
     cv_.notify_all();                    // the pump keeps the sound up with the picture
   }
 
-  /** Put a flushed frame back in line, in source order. */
-  void requeueLocked(IDeckLinkMutableVideoFrame* f, uint64_t seq) {
-    auto it = readyQ_.begin();
-    while (it != readyQ_.end() && slot_[*it].seq < seq) ++it;
-    readyQ_.insert(it, f);
+  /**
+   * EnableAudioOutput, as this session wants it. Called once at setup and
+   * again on every resume, because the sequence a card has been seen to run
+   * is enable → preroll → start, from scratch; pause disables it again.
+   */
+  bool enableAudioOutput() {
+    const BMDAudioSampleType depth = (audioDepth_ == 32) ? bmdAudioSampleType32bitInteger : bmdAudioSampleType16bitInteger;
+    const HRESULT hr = out_->EnableAudioOutput(bmdAudioSampleRate48kHz, depth, static_cast<uint32_t>(audioChannels_),
+                                               bmdAudioOutputStreamTimestamped);
+    if (hr != S_OK) {
+      std::fprintf(stderr, "sdi-out: could not enable %d-channel %d-bit audio output (0x%08x) — continuing with picture only\n",
+                   audioChannels_, audioDepth_, static_cast<unsigned>(hr));
+      std::fflush(stderr);
+      return false;
+    }
+    audioOutputOn_ = true;
+    return true;
+  }
+
+  void disableAudioOutput() {
+    if (!audioOutputOn_) return;
+    const HRESULT hr = out_->DisableAudioOutput();
+    if (hr != S_OK) {
+      std::fprintf(stderr, "sdi-out: DisableAudioOutput returned 0x%08x\n", static_cast<unsigned>(hr));
+      std::fflush(stderr);
+    }
+    audioOutputOn_ = false;
   }
 
   /** The picture with this index has been shown; sound before it is not needed again. */
@@ -1106,13 +1125,13 @@ class Player {
    * result belongs to the old run and is dropped. Returns true on progress.
    * `lk` holds mu_ on entry and again on return.
    */
-  bool pumpAudioOnce(std::unique_lock<std::mutex>& lk, std::vector<int32_t>& buf) {
-    if (!audioEnabled_) return false;
+  bool pumpAudioOnce(std::unique_lock<std::mutex>& lk, std::vector<uint8_t>& buf) {
+    if (!audioEnabled_ || !audioOutputOn_) return false;
     const int64_t target = framesToSamples(totalScheduled_);
     while (!quiet_.empty() && quiet_.front().second <= audioLocal_) quiet_.pop_front();
     if (audioLocal_ >= target) return false;
 
-    const int32_t* src = silence_.data();
+    const uint8_t* src = silence_.data();
     int64_t n = 0;
     bool fromSource = false;              // the piece consumes source samples too
     if (!quiet_.empty() && quiet_.front().first <= audioLocal_) {
@@ -1133,8 +1152,8 @@ class Player {
       } else {
         const int64_t off = audioCursor_ - c->first;
         n = std::min<int64_t>(std::min(c->frames - off, limit - audioLocal_), kSilenceFrames);
-        const auto from = c->data.begin() + static_cast<std::ptrdiff_t>(off * audioChannels_);
-        buf.assign(from, from + static_cast<std::ptrdiff_t>(n * audioChannels_));
+        const auto from = c->data.begin() + static_cast<std::ptrdiff_t>(static_cast<size_t>(off) * bytesPerSampleFrame_);
+        buf.assign(from, from + static_cast<std::ptrdiff_t>(static_cast<size_t>(n) * bytesPerSampleFrame_));
         src = buf.data();
         fromSource = true;
       }
@@ -1146,7 +1165,7 @@ class Player {
 
     lk.unlock();
     uint32_t written = 0;
-    const HRESULT hr = out_->ScheduleAudioSamples(const_cast<int32_t*>(src), static_cast<uint32_t>(n), at, kAudioRate, &written);
+    const HRESULT hr = out_->ScheduleAudioSamples(const_cast<uint8_t*>(src), static_cast<uint32_t>(n), at, kAudioRate, &written);
     lk.lock();
 
     if (run != runId_) return false;
@@ -1167,7 +1186,7 @@ class Player {
 
   // ---- pump thread: sound to the card, and a report now and then ----
   void pumpLoop() {
-    std::vector<int32_t> buf;
+    std::vector<uint8_t> buf;
     std::unique_lock<std::mutex> lk(mu_);
     while (!finished_) {
       if (playing_ && pumpAudioOnce(lk, buf)) continue;
@@ -1237,7 +1256,10 @@ class Player {
     // A new run: anything the pump had in flight for the old one is dropped.
     ++runId_;
     totalScheduled_ = 0;
-    if (audioEnabled_) {
+    // Pause disabled the audio output; every run enables it afresh, so the
+    // card sees the same enable → preroll → start sequence each time.
+    if (audioEnabled_ && !audioOutputOn_) enableAudioOutput();
+    if (audioEnabled_ && audioOutputOn_) {
       const HRESULT hr = out_->BeginAudioPreroll();
       if (hr != S_OK) {
         std::fprintf(stderr, "sdi-out: BeginAudioPreroll returned 0x%08x (run %llu) — sound may start late\n",
@@ -1254,13 +1276,13 @@ class Player {
     const uint64_t prerolled = totalScheduled_;
     // Then the sound for those frames, before the clock starts. The pump
     // thread stays out of it until playing_ is set.
-    std::vector<int32_t> buf;
+    std::vector<uint8_t> buf;
     while (pumpAudioOnce(lk, buf)) {}
     const int64_t audioPrerolled = audioLocal_;
     playing_ = true;
     lk.unlock();
 
-    if (audioEnabled_) {
+    if (audioEnabled_ && audioOutputOn_) {
       const HRESULT hr = out_->EndAudioPreroll();
       if (hr != S_OK) {
         std::fprintf(stderr, "sdi-out: EndAudioPreroll returned 0x%08x\n", static_cast<unsigned>(hr));
@@ -1297,10 +1319,12 @@ class Player {
     HRESULT hr = out_->StopScheduledPlayback(0, nullptr, timeScale_);
     if (hr != S_OK) std::fprintf(stderr, "sdi-out: StopScheduledPlayback returned 0x%08x\n", static_cast<unsigned>(hr));
     // Scheduled sound that has not played is flushed with the frames; the
-    // chunks it came from are still held and go out again on resume.
+    // chunks it came from are still held and go out again on resume. The
+    // audio output is then switched off until the next run enables it anew.
     if (audioEnabled_) {
       hr = out_->FlushBufferedAudioSamples();
       if (hr != S_OK) std::fprintf(stderr, "sdi-out: FlushBufferedAudioSamples returned 0x%08x\n", static_cast<unsigned>(hr));
+      disableAudioOutput();
     }
     // Keep the picture up rather than dropping to black.
     if (hold) {
@@ -1373,7 +1397,10 @@ class Player {
   static constexpr int64_t kSilenceFrames = 4096;   // one read, and the most silence scheduled per call
   int audioFd_ = -1;
   int audioChannels_ = 0;
-  bool audioEnabled_ = false;            // the card accepted EnableAudioOutput
+  int audioDepth_ = 16;                  // bits per sample: 16 or 32
+  size_t bytesPerSampleFrame_ = 0;       // channels * depth / 8
+  bool audioEnabled_ = false;            // this session carries sound (the card accepted it at setup)
+  bool audioOutputOn_ = false;           // EnableAudioOutput is in effect right now (off while paused)
   bool audioEof_ = false;
   bool audioScheduleWarned_ = false;
   std::deque<AudioChunk> audioQ_;        // contiguous, ascending; kept until the picture has shown
@@ -1381,7 +1408,7 @@ class Player {
   int64_t audioCursor_ = 0;              // next source sample frame to schedule
   int64_t audioLocal_ = 0;               // stream time scheduled so far this run, in sample frames
   std::deque<std::pair<int64_t, int64_t>> quiet_;   // [from, to) spans of local stream time that are silent
-  std::vector<int32_t> silence_;         // kSilenceFrames of zeros, audioChannels_ wide
+  std::vector<uint8_t> silence_;         // kSilenceFrames of zeros, one sample frame wide each
   uint64_t audioScheduledTotal_ = 0;
 };
 
@@ -1464,7 +1491,7 @@ int play(int deviceIndex, const std::string& modeId, int controlFd, int audioFd)
 
   int rc = 1;
   {
-    Player player(out, mode, audioFd, gAudioChannels);
+    Player player(out, mode, audioFd, gAudioChannels, gAudioDepth);
     if (player.setup()) rc = player.run(controlFd);
   }
 
@@ -1482,14 +1509,15 @@ void usage() {
     "      JSON array of output-capable devices and the progressive modes each\n"
     "      can drive at 10-bit YUV over SDI. [] when Desktop Video is absent.\n"
     "\n"
-    "  sdi-out --play --device N --mode XXXX [--buffer-frames 24] [--audio-channels 2|8|16]\n"
+    "  sdi-out --play --device N --mode XXXX [--buffer-frames 24] [--audio-channels 2|8|16] [--audio-depth 16|32]\n"
     "      Read v210 frames on stdin and schedule them to device N in display\n"
     "      mode XXXX (a four-character id from --list-devices). Control lines\n"
     "      on fd 3: play | pause | stop. Status lines on stderr: status:...\n"
     "      --buffer-frames sets the on-card cushion (default 24, min 4).\n"
-    "      --audio-channels embeds sound read from fd 4: 48 kHz, 32-bit signed\n"
-    "      little-endian integer PCM, interleaved, that many channels, in step\n"
-    "      with the frames on stdin from the same start point.\n");
+    "      --audio-channels embeds sound read from fd 4: 48 kHz signed\n"
+    "      little-endian integer PCM, interleaved, that many channels, at\n"
+    "      --audio-depth bits per sample (default 16), in step with the frames\n"
+    "      on stdin from the same start point.\n");
 }
 
 }  // namespace
@@ -1519,11 +1547,16 @@ int main(int argc, const char* argv[]) {
       else if (a == "--mode" && has) mode = argv[++i];
       else if (a == "--buffer-frames" && has) gPoolFrames = std::max(4, std::atoi(argv[++i]));
       else if (a == "--audio-channels" && has) gAudioChannels = std::atoi(argv[++i]);
+      else if (a == "--audio-depth" && has) gAudioDepth = std::atoi(argv[++i]);
       else { fail("unrecognised argument '" + a + "'"); return 2; }
     }
     if (device < 0 || mode.size() != 4) { usage(); return 2; }
     if (gAudioChannels != 0 && !validAudioChannels(gAudioChannels)) {
       fail("--audio-channels must be 2, 8 or 16 — the counts SDI embedded audio comes in");
+      return 2;
+    }
+    if (!validAudioDepth(gAudioDepth)) {
+      fail("--audio-depth must be 16 or 32");
       return 2;
     }
     // fd 3 is the control channel if the parent opened one; fd 4 the sound.

@@ -20,7 +20,7 @@ and needs no account; this is the missing output.
 
 ```
 EXR / DPX / ProRes → ffmpeg (v210, 10-bit 4:2:2) → sdi-out → DeckLink → SDI
-                            (PCM 48 kHz 32-bit) ↗     ↑         (picture + embedded sound)
+                            (PCM 48 kHz 16-bit) ↗     ↑         (picture + embedded sound)
                                  on fd 4       control lines on fd 3
 ```
 
@@ -45,7 +45,9 @@ verified frame by frame (5…10, then 1…10, 1…10 …) on ffmpeg 6.1 and 9.0.
 
 **Sound goes out embedded in the SDI stream, in step with the picture.** The
 *same* ffmpeg that decodes the frames writes the clip's audio as raw PCM
-(48 kHz, 32-bit integer, interleaved) on a second output pipe, which reaches
+(48 kHz, 16-bit integer by default — what ffmpeg's own DeckLink output and
+every Blackmagic sample use; `MAIDENPLAYER_SDI_AUDIO_DEPTH=32` for a 24-bit
+master — interleaved) on a second output pipe, which reaches
 the helper on fd 4. One decoder for both means a seek or a loop lands picture
 and sound on the same instant. The helper schedules the samples with
 `ScheduleAudioSamples` at the stream time of the frame they belong to, the way
@@ -136,9 +138,12 @@ position and stays stable even when capture-only devices are skipped.
 ### `sdi-out --play --device N --mode XXXX [--buffer-frames 24] [--audio-channels 2|8|16]`
 
 v210 frames on **stdin**, back to back. Control lines on **fd 3**: `play`,
-`pause`, `stop`. With `--audio-channels`, sound on **fd 4**: 48 kHz, 32-bit
-signed little-endian integer PCM, interleaved, that many channels, starting
-from the same point in the clip as the first frame on stdin. Status lines on
+`pause`, `stop`. With `--audio-channels`, sound on **fd 4**: 48 kHz signed
+little-endian integer PCM, interleaved, that many channels, at
+`--audio-depth` bits per sample (16 or 32; default 16), starting from the
+same point in the clip as the first frame on stdin. Pause disables the audio
+output and each run enables it afresh, so the card always sees the same
+enable → preroll → start sequence. Status lines on
 stderr, prefixed `status:` — `mode … audio=8ch|off|unavailable`, `playing`,
 `paused`, `underrun`, `recovered`, `eof frames=N [audio-samples=S]`,
 `stopped`.

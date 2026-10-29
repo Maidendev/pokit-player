@@ -15,7 +15,7 @@
  * touches the proxy:
  *
  *   EXR / DPX / ProRes → ffmpeg (v210, 10-bit 4:2:2) → sdi-out → DeckLink → SDI
- *                               (PCM, 48 kHz 32-bit) ↗  on a second pipe
+ *                               (PCM, 48 kHz 16-bit) ↗  on a second pipe
  *
  * v210 is the DeckLink-native pixel format (bmdFormat10BitYUV), so frames
  * reach the card with no conversion. Sound travels beside the picture, not
@@ -253,10 +253,20 @@ function matchModeForSource(source, supported) {
 // mono guide track is put on both sides of the room. Channels are laid into
 // the embed in source order and never mixed — on a review projector the
 // question is "is the Ls where it should be", and a downmix cannot answer it.
-// 32-bit integer samples carry a 24-bit master without loss.
+// Samples are 16-bit integer unless asked otherwise (see audioDepth).
 // ---------------------------------------------------------------------------
 
 const AUDIO_RATE = 48000;
+
+/**
+ * Bits per sample sent to the card. 16 by default: it is what ffmpeg's own
+ * DeckLink output and every Blackmagic sample use, the most exercised path
+ * through the driver, and more than a review room can hear. 32 carries a
+ * 24-bit master without loss; MAIDENPLAYER_SDI_AUDIO_DEPTH=32 asks for it.
+ */
+function audioDepth() {
+  return process.env.MAIDENPLAYER_SDI_AUDIO_DEPTH === '32' ? 32 : 16;
+}
 
 /**
  * Channels to embed for a source with `total` channels on a device that
@@ -285,7 +295,7 @@ function planAudio(probe, device) {
   if (streams < 1 || channels < 1) return null;
   const outChannels = audioOutputChannels(channels, device ? device.maxAudioChannels : 0);
   if (!outChannels) return null;
-  return { streams, channels, outChannels };
+  return { streams, channels, outChannels, depth: audioDepth() };
 }
 
 /**
@@ -445,9 +455,10 @@ function buildDecodeArgs(opts) {
   args.push('-filter_complex', graph.join(';'));
 
   // Two outputs, each with its own map: v210 on stdout as before, and the
-  // sound as raw 32-bit PCM on fd 3 — which the helper reads on ITS fd 4.
+  // sound as raw integer PCM on fd 3 — which the helper reads on ITS fd 4.
+  const pcm = (audio.depth === 32) ? 's32le' : 's16le';
   args.push('-map', '[v]', '-r', mode.fpsRational, '-c:v', 'v210', '-f', 'rawvideo', 'pipe:1');
-  args.push('-map', '[a]', '-c:a', 'pcm_s32le', '-f', 's32le', 'pipe:3');
+  args.push('-map', '[a]', '-c:a', 'pcm_' + pcm, '-f', pcm, 'pipe:3');
   return args;
 }
 
@@ -641,7 +652,7 @@ class SdiOutput {
                         '--buffer-frames', bufferFrames];
     const helperStdio = ['pipe', 'ignore', 'pipe', 'pipe'];
     if (audio) {
-      helperArgs.push('--audio-channels', String(audio.outChannels));
+      helperArgs.push('--audio-channels', String(audio.outChannels), '--audio-depth', String(audio.depth === 32 ? 32 : 16));
       helperStdio.push('pipe');
     }
     this.helper = spawn(helperBin, helperArgs, { windowsHide: true, stdio: helperStdio });
