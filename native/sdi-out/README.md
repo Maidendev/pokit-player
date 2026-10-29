@@ -143,6 +143,26 @@ stderr, prefixed `status:` — `mode … audio=8ch|off|unavailable`, `playing`,
 `paused`, `underrun`, `recovered`, `eof frames=N [audio-samples=S]`,
 `stopped`.
 
+Diagnostic lines, prefixed `diag:`, are informational and never change the
+player's state: `diag:start run=N frames-prerolled=K audio-prerolled=S` when
+the clock starts, and every three seconds while playing
+
+```
+diag:playout run=1 scheduled=312 completed=300 late=0 dropped=0 flushed=0 underruns=0 read=324 ready=12 free=0 card-frames=12 audio-local=624624 audio-cursor=624624 audio-read=700416 audio-chunks=22 card-samples=24048
+```
+
+— what the helper has scheduled and what the card says it completed (and
+how: late, dropped, flushed), how far the reader is, what is queued, and the
+card's own buffered frame and sample counts. A rig test that ends in "no
+picture" is read from these: `completed` not moving means the card is not
+running the schedule; `completed` moving with `dropped` climbing means frames
+are arriving late; everything moving with no picture means the signal, the
+mode, or the monitor. Every non-S_OK result from the driver is also printed
+with its HRESULT. The player writes all of it to `sdi.log` beside
+`updater.log` (Playback ▸ External Video Output ▸ Output Diagnostics… shows
+the path), and `MAIDENPLAYER_SDI_AUDIO=0` in the environment sends picture
+only, which separates a sound problem from a picture problem in one run.
+
 ## Row stride — the trap
 
 | Raster | Row bytes | naive `w/6*16` |

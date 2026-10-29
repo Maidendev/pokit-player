@@ -599,6 +599,7 @@ class SdiOutput {
     this.onStatus = null;   // (string) => void — 'playing' | 'paused' | 'underrun' | 'eof ...' | 'stopped'
     this.onError = null;    // (string) => void
     this.onEnd = null;      // () => void
+    this.onLog = null;      // (string) => void — every line the helper says, and the commands run; for a log file
   }
 
   /**
@@ -625,7 +626,12 @@ class SdiOutput {
     }
 
     this.active = true;
-    const audio = (opts.audio && opts.audio.outChannels > 0) ? opts.audio : null;
+    const log = (line) => { if (this.onLog) { try { this.onLog(line); } catch (_) { /* logging must never break playout */ } } };
+    // MAIDENPLAYER_SDI_AUDIO=0 sends picture only — the quickest way, on a
+    // rig, to tell a sound problem from a picture problem.
+    const audioOff = process.env.MAIDENPLAYER_SDI_AUDIO === '0';
+    const audio = (opts.audio && opts.audio.outChannels > 0 && !audioOff) ? opts.audio : null;
+    if (audioOff && opts.audio) log('audio disabled by MAIDENPLAYER_SDI_AUDIO=0');
 
     // stdin: frames. stderr: status. fd 3: control lines. fd 4: sound.
     // 24 frames is a second of cushion at 24 fps; see sdi-out.cpp for the
@@ -639,7 +645,9 @@ class SdiOutput {
       helperStdio.push('pipe');
     }
     this.helper = spawn(helperBin, helperArgs, { windowsHide: true, stdio: helperStdio });
+    log('helper: ' + helperBin + ' ' + helperArgs.join(' '));
     this.decoder = spawnDecoder(Object.assign({}, opts, { audio }));
+    log('decoder: ' + FFMPEG + ' ' + this.decoder.spawnargs.slice(1).join(' '));
 
     this.decoder.stdout.pipe(this.helper.stdin);
     if (audio) this.decoder.stdio[3].pipe(this.helper.stdio[4]);
@@ -663,6 +671,7 @@ class SdiOutput {
       const text = d.toString();
       for (const line of text.split('\n')) {
         if (!line) continue;
+        log(line);
         if (line.startsWith('status:')) {
           const st = line.slice(7).trim();
           console.log('[SDI] ' + st);
@@ -676,7 +685,11 @@ class SdiOutput {
     this.decoder.stderr.on('data', (d) => {
       // ffmpeg is chatty; keep only what a failure would need.
       const t = d.toString();
-      if (/error|invalid|no such|permission/i.test(t)) console.error('[SDI] ffmpeg:', t.trim().split('\n').pop());
+      if (/error|invalid|no such|permission/i.test(t)) {
+        const last = t.trim().split('\n').pop();
+        console.error('[SDI] ffmpeg:', last);
+        log('ffmpeg: ' + last);
+      }
     });
 
     this.helper.on('error', (e) => {
@@ -708,6 +721,7 @@ class SdiOutput {
 
   control(cmd) {
     if (!this.helper || !this.helper.stdio[3]) return;
+    if (this.onLog) { try { this.onLog('control: ' + cmd); } catch (_) { /* ignore */ } }
     try { this.helper.stdio[3].write(cmd + '\n'); } catch (_) { /* helper gone */ }
   }
   pause()  { this.control('pause'); }

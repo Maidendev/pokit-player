@@ -58,6 +58,15 @@
 //     back out, and a repeated frame (underrun) gets a frame of silence so
 //     the two never drift apart. Sound that has been scheduled is kept until
 //     its picture has been SHOWN, because a flush takes it back off the card.
+//     The sound is handed to the card by its own pump thread, never from the
+//     frame-completion callback and never while holding the lock: a driver
+//     call that waits for buffer space must not be able to hold up the
+//     thread that keeps the picture going.
+//
+//  8. Every few seconds while playing, a `diag:playout` line on stderr says
+//     what the card reported — frames completed, late, dropped, flushed, what
+//     is buffered on it — so that "no picture" from a rig comes with facts.
+//     The player keeps these in its sdi.log.
 
 #if defined(_WIN32)
   #include <windows.h>
@@ -82,6 +91,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -809,8 +819,18 @@ class Player {
   int run(int controlFd) {
     reader_ = std::thread([this] { readerLoop(); });
     if (audioFd_ >= 0) audioReader_ = std::thread([this] { audioReaderLoop(); });
+    pump_ = std::thread([this] { pumpLoop(); });
 
-    if (!startPlayback()) return 1;
+    if (!startPlayback()) {
+      { std::lock_guard<std::mutex> lk(mu_); finished_ = true; }
+      cv_.notify_all();
+      pump_.join();
+      // The readers are blocked on their pipes; process exit reclaims them.
+      // (A joinable std::thread member would abort the process on the way out.)
+      if (reader_.joinable()) reader_.detach();
+      if (audioReader_.joinable()) audioReader_.detach();
+      return 1;
+    }
 
     // Control lines on fd 3, when the player gave us one. Otherwise run to EOF.
     FILE* ctl = (controlFd >= 0) ? fdOpenRead(controlFd) : nullptr;
@@ -837,6 +857,12 @@ class Player {
     if (control.joinable()) { if (ctl) { /* fgets returns on close */ } control.detach(); }
     if (reader_.joinable()) reader_.detach();             // blocked on stdin; process exit reclaims it
     if (audioReader_.joinable()) audioReader_.detach();   // likewise, on fd 4
+    cv_.notify_all();
+    if (pump_.joinable()) pump_.join();                   // wakes on finished_; never blocks on a pipe
+    {
+      std::unique_lock<std::mutex> lk(mu_);
+      reportLocked(lk, true);
+    }
     if (audioEnabled_) out_->DisableAudioOutput();
     out_->DisableVideoOutput();
     status("stopped");
@@ -851,8 +877,10 @@ class Player {
     if (result == bmdOutputFrameDisplayedLate) ++late_;
     auto* frame = static_cast<IDeckLinkMutableVideoFrame*>(completed);
     const SlotInfo info = slot_[completed];
+    ++completed_;
 
     if (result == bmdOutputFrameFlushed) {
+      ++flushedTotal_;
       // A stop or pause took it back before it was shown. It goes back in
       // line, in source order, so resume carries on from the picture that
       // was on screen rather than a few frames later — and the sound, which
@@ -970,8 +998,7 @@ class Player {
         c.first = audioRead_;
         audioRead_ += c.frames;
         audioQ_.push_back(std::move(c));
-        if (playing_) pumpAudioLocked();
-        cv_.notify_all();
+        cv_.notify_all();                 // wakes the pump
       }
       if (whole > 0) {
         std::memmove(buf.data(), buf.data() + whole, have - whole);
@@ -1039,7 +1066,7 @@ class Player {
       quiet_.emplace_back(framesToSamples(totalScheduled_), framesToSamples(totalScheduled_ + 1));
     }
     ++totalScheduled_;
-    pumpAudioLocked();
+    cv_.notify_all();                    // the pump keeps the sound up with the picture
   }
 
   /** Put a flushed frame back in line, in source order. */
@@ -1064,73 +1091,121 @@ class Player {
     return nullptr;
   }
 
-  /** ScheduleAudioSamples at the current local stream time. Returns sample frames taken; 0 means try again later. */
-  uint32_t scheduleSamples(const int32_t* p, int64_t n) {
-    if (n <= 0) return 0;
-    const uint32_t count = static_cast<uint32_t>(std::min<int64_t>(n, 1 << 20));
+  /**
+   * One step of the audio pump. Sound is kept scheduled exactly as far ahead
+   * as the picture — up to the end of the last video slot. Under the lock
+   * the next piece is chosen: real sound from the chunk at the cursor,
+   * copied out; or silence for a quiet span (a repeated frame), a hole, or
+   * the end of the track. Then the lock is RELEASED for the call into the
+   * driver, so neither the frame-completion callback nor the readers can
+   * ever wait on it, and taken again to commit what the card accepted. A
+   * partial write means the card's buffer is full; the rest goes next time.
+   * Local stream time (what the card is told) and the source cursor (which
+   * sample is next) move together, except across a quiet span, where only
+   * stream time moves. If playback was restarted during the driver call the
+   * result belongs to the old run and is dropped. Returns true on progress.
+   * `lk` holds mu_ on entry and again on return.
+   */
+  bool pumpAudioOnce(std::unique_lock<std::mutex>& lk, std::vector<int32_t>& buf) {
+    if (!audioEnabled_) return false;
+    const int64_t target = framesToSamples(totalScheduled_);
+    while (!quiet_.empty() && quiet_.front().second <= audioLocal_) quiet_.pop_front();
+    if (audioLocal_ >= target) return false;
+
+    const int32_t* src = silence_.data();
+    int64_t n = 0;
+    bool fromSource = false;              // the piece consumes source samples too
+    if (!quiet_.empty() && quiet_.front().first <= audioLocal_) {
+      n = std::min(quiet_.front().second, target) - audioLocal_;
+    } else {
+      int64_t limit = target;
+      if (!quiet_.empty()) limit = std::min(limit, quiet_.front().first);
+      const AudioChunk* c = chunkFrom(audioCursor_);
+      if (!c) {
+        if (!audioEof_) return false;     // not here yet; the next frame or chunk will ask again
+        n = limit - audioLocal_;          // the sound ended before the picture did: silence from here on
+        fromSource = true;
+      } else if (audioCursor_ < c->first) {
+        // A hole before the next sound — not something a healthy stream
+        // does, but filled rather than left for the card to guess at.
+        n = std::min(c->first - audioCursor_, limit - audioLocal_);
+        fromSource = true;
+      } else {
+        const int64_t off = audioCursor_ - c->first;
+        n = std::min<int64_t>(std::min(c->frames - off, limit - audioLocal_), kSilenceFrames);
+        const auto from = c->data.begin() + static_cast<std::ptrdiff_t>(off * audioChannels_);
+        buf.assign(from, from + static_cast<std::ptrdiff_t>(n * audioChannels_));
+        src = buf.data();
+        fromSource = true;
+      }
+    }
+    n = std::min<int64_t>(n, kSilenceFrames);
+    if (n <= 0) return false;
+    const int64_t at = audioLocal_;
+    const uint64_t run = runId_;
+
+    lk.unlock();
     uint32_t written = 0;
-    const HRESULT hr = out_->ScheduleAudioSamples(const_cast<int32_t*>(p), count, audioLocal_, kAudioRate, &written);
+    const HRESULT hr = out_->ScheduleAudioSamples(const_cast<int32_t*>(src), static_cast<uint32_t>(n), at, kAudioRate, &written);
+    lk.lock();
+
+    if (run != runId_) return false;
     if (hr != S_OK) {
       if (!audioScheduleWarned_) {
         audioScheduleWarned_ = true;
-        std::fprintf(stderr, "sdi-out: ScheduleAudioSamples failed (0x%08x) — sound may drop out\n", static_cast<unsigned>(hr));
+        std::fprintf(stderr, "sdi-out: ScheduleAudioSamples failed (0x%08x) at %lld — sound may drop out\n",
+                     static_cast<unsigned>(hr), static_cast<long long>(at));
         std::fflush(stderr);
       }
-      return 0;
+      return false;
     }
+    audioLocal_ += written;
+    if (fromSource) audioCursor_ += written;
     audioScheduledTotal_ += written;
-    return written;
+    return written > 0;
   }
 
-  uint32_t scheduleSilence(int64_t n) {
-    return scheduleSamples(silence_.data(), std::min<int64_t>(n, kSilenceFrames));
+  // ---- pump thread: sound to the card, and a report now and then ----
+  void pumpLoop() {
+    std::vector<int32_t> buf;
+    std::unique_lock<std::mutex> lk(mu_);
+    while (!finished_) {
+      if (playing_ && pumpAudioOnce(lk, buf)) continue;
+      if (playing_) reportLocked(lk, false);
+      cv_.wait_for(lk, std::chrono::milliseconds(5));
+    }
   }
 
   /**
-   * Keep sound scheduled exactly as far ahead as the picture: up to the end
-   * of the last video slot. Called whenever a frame is scheduled and whenever
-   * sound arrives. Local stream time (what the card is told) and the source
-   * cursor (which sample is next) move together, except across a quiet span
-   * for a repeated frame, where only stream time moves. A partial write
-   * means the card's buffer is full; the rest goes on the next tick.
+   * What the card has done so far, as one diag line — every few seconds
+   * while playing, and once at the end. Counts come from the completion
+   * callback; the buffered figures are the card's own. mu_ held; released
+   * around the two driver calls.
    */
-  void pumpAudioLocked() {
-    if (!audioEnabled_) return;
-    const int64_t target = framesToSamples(totalScheduled_);
-    while (audioLocal_ < target) {
-      if (!quiet_.empty() && quiet_.front().second <= audioLocal_) { quiet_.pop_front(); continue; }
-      if (!quiet_.empty() && quiet_.front().first <= audioLocal_) {
-        const uint32_t w = scheduleSilence(std::min(quiet_.front().second, target) - audioLocal_);
-        if (w == 0) return;
-        audioLocal_ += w;
-        continue;
-      }
-      int64_t limit = target;
-      if (!quiet_.empty()) limit = std::min(limit, quiet_.front().first);
-
-      const AudioChunk* c = chunkFrom(audioCursor_);
-      if (!c) {
-        if (!audioEof_) return;                   // not here yet; the next frame will ask again
-        // The sound ended before the picture did: silence from here on.
-        const uint32_t w = scheduleSilence(limit - audioLocal_);
-        if (w == 0) return;
-        audioLocal_ += w; audioCursor_ += w;
-        continue;
-      }
-      if (audioCursor_ < c->first) {
-        // A hole before the next sound — not something a healthy stream
-        // does, but filled rather than left for the card to guess at.
-        const uint32_t w = scheduleSilence(std::min(c->first - audioCursor_, limit - audioLocal_));
-        if (w == 0) return;
-        audioLocal_ += w; audioCursor_ += w;
-        continue;
-      }
-      const int64_t off = audioCursor_ - c->first;
-      const int64_t n = std::min(c->frames - off, limit - audioLocal_);
-      const uint32_t w = scheduleSamples(c->data.data() + static_cast<size_t>(off) * static_cast<size_t>(audioChannels_), n);
-      if (w == 0) return;
-      audioLocal_ += w; audioCursor_ += w;
-    }
+  void reportLocked(std::unique_lock<std::mutex>& lk, bool force) {
+    const auto now = std::chrono::steady_clock::now();
+    if (!force && now - lastReport_ < std::chrono::seconds(3)) return;
+    lastReport_ = now;
+    const bool audio = audioEnabled_;
+    lk.unlock();
+    uint32_t cardFrames = 0, cardSamples = 0;
+    out_->GetBufferedVideoFrameCount(&cardFrames);
+    if (audio) out_->GetBufferedAudioSampleFrameCount(&cardSamples);
+    lk.lock();
+    std::fprintf(stderr,
+                 "diag:playout run=%llu scheduled=%llu completed=%llu late=%llu dropped=%llu flushed=%llu underruns=%llu"
+                 " read=%llu ready=%zu free=%zu card-frames=%u",
+                 static_cast<unsigned long long>(runId_), static_cast<unsigned long long>(totalScheduled_),
+                 static_cast<unsigned long long>(completed_), static_cast<unsigned long long>(late_),
+                 static_cast<unsigned long long>(dropped_), static_cast<unsigned long long>(flushedTotal_),
+                 static_cast<unsigned long long>(underrunTotal_), static_cast<unsigned long long>(readSeq_),
+                 readyQ_.size(), freeQ_.size(), cardFrames);
+    if (audio)
+      std::fprintf(stderr, " audio-local=%lld audio-cursor=%lld audio-read=%lld audio-chunks=%zu card-samples=%u",
+                   static_cast<long long>(audioLocal_), static_cast<long long>(audioCursor_),
+                   static_cast<long long>(audioRead_), audioQ_.size(), cardSamples);
+    std::fprintf(stderr, "\n");
+    std::fflush(stderr);
   }
 
   bool startPlayback() {
@@ -1158,24 +1233,43 @@ class Player {
       audioCursor_ = framesToSamples(firstSeq);
       audioLocal_ = 0;
       quiet_.clear();
-      if (out_->BeginAudioPreroll() != S_OK && !audioPrerollWarned_) {
-        audioPrerollWarned_ = true;
-        std::fprintf(stderr, "sdi-out: BeginAudioPreroll failed — sound may start late\n");
+    }
+    // A new run: anything the pump had in flight for the old one is dropped.
+    ++runId_;
+    totalScheduled_ = 0;
+    if (audioEnabled_) {
+      const HRESULT hr = out_->BeginAudioPreroll();
+      if (hr != S_OK) {
+        std::fprintf(stderr, "sdi-out: BeginAudioPreroll returned 0x%08x (run %llu) — sound may start late\n",
+                     static_cast<unsigned>(hr), static_cast<unsigned long long>(runId_));
         std::fflush(stderr);
       }
     }
 
-    totalScheduled_ = 0;
     while (!readyQ_.empty()) {
       IDeckLinkMutableVideoFrame* f = readyQ_.front();
       readyQ_.pop_front();
-      scheduleLocked(f, false);          // schedules the sound for each slot as it goes
+      scheduleLocked(f, false);
     }
+    const uint64_t prerolled = totalScheduled_;
+    // Then the sound for those frames, before the clock starts. The pump
+    // thread stays out of it until playing_ is set.
+    std::vector<int32_t> buf;
+    while (pumpAudioOnce(lk, buf)) {}
+    const int64_t audioPrerolled = audioLocal_;
     playing_ = true;
     lk.unlock();
 
-    if (audioEnabled_) out_->EndAudioPreroll();
-    if (out_->StartScheduledPlayback(0, timeScale_, 1.0) != S_OK) {
+    if (audioEnabled_) {
+      const HRESULT hr = out_->EndAudioPreroll();
+      if (hr != S_OK) {
+        std::fprintf(stderr, "sdi-out: EndAudioPreroll returned 0x%08x\n", static_cast<unsigned>(hr));
+        std::fflush(stderr);
+      }
+    }
+    const HRESULT started = out_->StartScheduledPlayback(0, timeScale_, 1.0);
+    if (started != S_OK) {
+      std::fprintf(stderr, "sdi-out: StartScheduledPlayback returned 0x%08x\n", static_cast<unsigned>(started));
       fail("StartScheduledPlayback failed");
       std::lock_guard<std::mutex> g(mu_);
       playing_ = false;
@@ -1183,6 +1277,10 @@ class Player {
       cv_.notify_all();
       return false;
     }
+    std::fprintf(stderr, "diag:start run=%llu frames-prerolled=%llu audio-prerolled=%lld\n",
+                 static_cast<unsigned long long>(runId_), static_cast<unsigned long long>(prerolled),
+                 static_cast<long long>(audioPrerolled));
+    std::fflush(stderr);
     status("playing");
     return true;
   }
@@ -1196,12 +1294,23 @@ class Player {
       hold = held_;
       if (hold) hold->AddRef();
     }
-    out_->StopScheduledPlayback(0, nullptr, timeScale_);
+    HRESULT hr = out_->StopScheduledPlayback(0, nullptr, timeScale_);
+    if (hr != S_OK) std::fprintf(stderr, "sdi-out: StopScheduledPlayback returned 0x%08x\n", static_cast<unsigned>(hr));
     // Scheduled sound that has not played is flushed with the frames; the
     // chunks it came from are still held and go out again on resume.
-    if (audioEnabled_) out_->FlushBufferedAudioSamples();
+    if (audioEnabled_) {
+      hr = out_->FlushBufferedAudioSamples();
+      if (hr != S_OK) std::fprintf(stderr, "sdi-out: FlushBufferedAudioSamples returned 0x%08x\n", static_cast<unsigned>(hr));
+    }
     // Keep the picture up rather than dropping to black.
-    if (hold) { out_->DisplayVideoFrameSync(hold); hold->Release(); }
+    if (hold) {
+      hr = out_->DisplayVideoFrameSync(hold);
+      if (hr != S_OK) std::fprintf(stderr, "sdi-out: DisplayVideoFrameSync returned 0x%08x\n", static_cast<unsigned>(hr));
+      hold->Release();
+    } else {
+      std::fprintf(stderr, "diag:pause no frame had been shown yet, so nothing is held\n");
+    }
+    std::fflush(stderr);
     status("paused");
   }
 
@@ -1210,7 +1319,11 @@ class Player {
       std::lock_guard<std::mutex> lk(mu_);
       playing_ = false;
     }
-    out_->StopScheduledPlayback(0, nullptr, timeScale_);
+    const HRESULT hr = out_->StopScheduledPlayback(0, nullptr, timeScale_);
+    if (hr != S_OK) {
+      std::fprintf(stderr, "sdi-out: StopScheduledPlayback returned 0x%08x\n", static_cast<unsigned>(hr));
+      std::fflush(stderr);
+    }
     if (audioEnabled_) out_->FlushBufferedAudioSamples();
     std::lock_guard<std::mutex> lk(mu_);
     finished_ = true;
@@ -1243,13 +1356,17 @@ class Player {
   std::condition_variable cv_;
   std::thread reader_;
   std::thread audioReader_;
+  std::thread pump_;
+  std::chrono::steady_clock::time_point lastReport_{};
 
   bool playing_ = false;
   bool eof_ = false;
   bool finished_ = false;
   bool inUnderrun_ = false;
+  uint64_t runId_ = 0;                   // bumped each time the clock (re)starts
   uint64_t readSeq_ = 0;                 // source index of the next frame read from stdin
   uint64_t totalScheduled_ = 0;          // slots scheduled since the clock last started
+  uint64_t completed_ = 0, flushedTotal_ = 0;
   uint64_t underrunTotal_ = 0, dropped_ = 0, late_ = 0;
 
   // ---- sound ----
@@ -1258,7 +1375,7 @@ class Player {
   int audioChannels_ = 0;
   bool audioEnabled_ = false;            // the card accepted EnableAudioOutput
   bool audioEof_ = false;
-  bool audioPrerollWarned_ = false, audioScheduleWarned_ = false;
+  bool audioScheduleWarned_ = false;
   std::deque<AudioChunk> audioQ_;        // contiguous, ascending; kept until the picture has shown
   int64_t audioRead_ = 0;                // source sample frames read so far
   int64_t audioCursor_ = 0;              // next source sample frame to schedule

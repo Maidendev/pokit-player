@@ -162,6 +162,9 @@ async function refreshSdiDevices() {
   sdiDevices = sdiLastScan.devices || [];
   if (sdiLastScan.error) console.error('[SDI] Device enumeration:', sdiLastScan.error);
   if (sdiLastScan.stderr) console.log('[SDI] helper said:\n' + sdiLastScan.stderr.trim());
+  sdiLog('scan: ' + sdiDevices.length + ' device(s) ' + JSON.stringify(sdiDevices.map((d) => ({ index: d.index, name: d.name, maxAudioChannels: d.maxAudioChannels })))
+         + (sdiLastScan.error ? ' error: ' + sdiLastScan.error.split('\n')[0] : ''));
+  for (const line of (sdiLastScan.stderr || '').split('\n')) if (line.trim()) sdiLog('scan: ' + line.trim());
   // A device that has been unplugged must not stay selected.
   if (sdiSelectedIndex !== -1 && !sdiSelectedDevice()) selectSdiDevice(-1);
   buildMenu();
@@ -238,6 +241,7 @@ async function showSdiDiagnostics() {
     'Helper: ' + (r.helper || 'not found in this build'),
     'Exit: ' + (r.signal ? 'killed by ' + r.signal : (r.code === null ? 'did not run' : 'code ' + r.code)),
     'Devices: ' + (r.devices ? r.devices.length : 0),
+    'Session log: ' + (sdiLogFile() || 'unavailable') + ' (every playout session, with the card\'s own figures)',
     '',
     '— helper stderr —',
     (r.stderr || '').trim() || '(nothing)',
@@ -1081,6 +1085,7 @@ ipcMain.handle('sdi-start', async (_event, opts) => {
   // seek or a loop toggle is exactly this restart.
   if (sdiOutput) await sdiOutput.stop();
   sdiOutput = new sdi.SdiOutput();
+  sdiOutput.onLog = sdiLog;
 
   const send = (payload) => { if (mainWindow) mainWindow.webContents.send('sdi-status', payload); };
   let holdOnFirstPlay = !!opts.startPaused;
@@ -1117,12 +1122,17 @@ ipcMain.handle('sdi-start', async (_event, opts) => {
     audio,
   });
   if (!ok) return { error: sdi.MISSING_HELPER_MESSAGE };
-  console.log('[SDI] Started:', device.name, mode.name, opts.source,
-              audio ? audio.outChannels + '-channel audio (' + audio.channels + ' in ' + audio.streams + ' stream(s))' : 'picture only');
+  const summary = audio ? audio.outChannels + '-channel audio (' + audio.channels + ' in ' + audio.streams + ' stream(s))' : 'picture only';
+  console.log('[SDI] Started:', device.name, mode.name, opts.source, summary);
+  sdiLog('start: "' + device.name + '" ' + mode.name + ' ' + summary + ' ' + JSON.stringify({
+    source: opts.source, isImageSequence: !!opts.isImageSequence, startFrame: opts.startFrame,
+    startTime: opts.startTime, loop: !!opts.loop, startPaused: !!opts.startPaused,
+    width: opts.width, height: opts.height, fps: opts.fps,
+  }));
   return { ok: true, mode: mode.name, device: device.name, audioChannels: audio ? audio.outChannels : 0 };
 });
 
-ipcMain.handle('sdi-stop', async () => { if (sdiOutput) { sdiOutput.stop(); sdiOutput = null; } return { ok: true }; });
+ipcMain.handle('sdi-stop', async () => { if (sdiOutput) { sdiLog('stop requested'); sdiOutput.stop(); sdiOutput = null; } return { ok: true }; });
 
 // ─── Media editing IPC (src/editor.js) ───────────────────────────────────────
 
@@ -1279,6 +1289,33 @@ function updaterLog(level, args) {
     fs.appendFileSync(file, new Date().toISOString() + ' [' + level + '] ' + text + '\n');
   } catch (_) { /* logging must never take the app down */ }
 }
+// The SDI session gets the same treatment: every status and diag line the
+// helper says, the commands that were run and the control sent to it. A rig
+// test that ends in "no picture" can only be diagnosed from this file.
+//   macOS    ~/Library/Logs/MaidenPlayer/sdi.log
+//   Windows  %APPDATA%\MaidenPlayer\logs\sdi.log
+let sdiLogPath = null;
+function sdiLogFile() {
+  if (sdiLogPath) return sdiLogPath;
+  try {
+    const dir = app.getPath('logs');
+    fs.mkdirSync(dir, { recursive: true });
+    sdiLogPath = path.join(dir, 'sdi.log');
+  } catch (_) {
+    sdiLogPath = null;
+  }
+  return sdiLogPath;
+}
+function sdiLog(text) {
+  const file = sdiLogFile();
+  if (!file) return;
+  try {
+    // Bounded: start over once it passes about 2 MB (a diag line every few seconds adds up).
+    try { if (fs.statSync(file).size > 2 * 1024 * 1024) fs.unlinkSync(file); } catch (_) { /* no file yet */ }
+    fs.appendFileSync(file, new Date().toISOString() + ' ' + text + '\n');
+  } catch (_) { /* logging must never take the app down */ }
+}
+
 autoUpdater.logger = {
   info: (...a) => updaterLog('info', a),
   warn: (...a) => updaterLog('warn', a),
