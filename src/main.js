@@ -329,6 +329,22 @@ function createWindow() {
     mainWindow = null;
   });
 
+  // The renderer keeps a body class in step with the window so CSS can hide
+  // the title bar; Esc and the OS can leave fullscreen without the renderer.
+  // On Windows and Linux the native menu bar (File, Edit, …) would otherwise
+  // stay across the top of a fullscreen picture, so it goes with the window
+  // and comes back on leaving. Accelerators keep working while it is hidden.
+  mainWindow.on('enter-full-screen', () => {
+    if (!mainWindow) return;
+    mainWindow.setMenuBarVisibility(false);
+    mainWindow.webContents.send('fullscreen-changed', true);
+  });
+  mainWindow.on('leave-full-screen', () => {
+    if (!mainWindow) return;
+    mainWindow.setMenuBarVisibility(true);
+    mainWindow.webContents.send('fullscreen-changed', false);
+  });
+
   // Handle file open from command line arguments
   const filePath = getFileFromArgs(process.argv);
   if (filePath) {
@@ -592,6 +608,16 @@ function buildMenu() {
             if (mainWindow) {
               mainWindow.setFullScreen(!mainWindow.isFullScreen());
             }
+          },
+        },
+        // Picture only: no title bar, transport, meters or big play button,
+        // even while paused — for screenshots and client viewing. The
+        // renderer owns the state, so the shortcut lives there too.
+        {
+          label: 'Presentation Fullscreen',
+          ...hint('CmdOrCtrl+F'),
+          click: () => {
+            if (mainWindow) mainWindow.webContents.send('toggle-presentation');
           },
         },
       ],

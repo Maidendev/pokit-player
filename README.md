@@ -176,6 +176,7 @@ Mask and LUT settings persist between launches and are mirrored in the View menu
 | `↑` / `↓` | Volume up / down |
 | `Shift+M` | Mute / Unmute (bare `M` is now Add Marker) |
 | `F` | Toggle fullscreen |
+| `⌘F` / `Ctrl+F` | Presentation fullscreen — picture only, no title bar or controls, even while paused (Esc exits) |
 | `0`–`9` | Jump to 0%–90% of video |
 | `⌘1` / `Ctrl+1` | Quarter size (25%) |
 | `⌘2` / `Ctrl+2` | Half size (50%) |

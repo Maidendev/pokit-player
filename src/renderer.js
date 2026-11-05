@@ -96,6 +96,11 @@
   let frameRate = 24;
   let frameDuration = 1 / frameRate;
   let controlsTimeout = null;
+  // Presentation fullscreen (Cmd/Ctrl+F): picture only. Everything the
+  // auto-hide normally spares while paused — transport, meters, the big play
+  // button, the title bar — stays hidden until the mouse moves.
+  let presentationMode = false;
+  let presentationEnteredAt = 0;
   let isTimelineDragging = false;
   let hasVideoLoaded = false;
   let lastVolume = 1;
@@ -1375,10 +1380,41 @@
     iconVolMute.classList.toggle('hidden', !muted);
   }
 
+  // Called on every transition and by the 1 s poll, so it must be idempotent.
+  function applyFullscreenState(isFs) {
+    const wasFs = document.body.classList.contains('is-fullscreen');
+    iconFsEnter.classList.toggle('hidden', isFs);
+    iconFsExit.classList.toggle('hidden', !isFs);
+    document.body.classList.toggle('is-fullscreen', isFs);
+    // The window now covers wherever the pointer was, which arrives as a
+    // mousemove: take the controls down again once the transition is done.
+    if (isFs && !wasFs && presentationMode) hideControls();
+    // Leaving fullscreen by any route (F, Esc, the menu, the OS) ends
+    // presentation mode and brings the controls back.
+    if (!isFs && presentationMode) {
+      presentationMode = false;
+      document.body.classList.remove('presentation');
+      showControls();
+    }
+  }
+
   function toggleFullscreen() {
-    window.electronAPI.toggleFullscreen().then((isFs) => {
-      iconFsEnter.classList.toggle('hidden', isFs);
-      iconFsExit.classList.toggle('hidden', !isFs);
+    window.electronAPI.toggleFullscreen().then(applyFullscreenState);
+  }
+
+  function togglePresentation() {
+    if (presentationMode) {
+      window.electronAPI.isFullscreen().then((isFs) => {
+        if (isFs) toggleFullscreen(); else applyFullscreenState(false);
+      });
+      return;
+    }
+    presentationMode = true;
+    presentationEnteredAt = performance.now();
+    document.body.classList.add('presentation');
+    window.electronAPI.isFullscreen().then((isFs) => {
+      if (isFs) applyFullscreenState(true); else toggleFullscreen();
+      hideControls();
     });
   }
 
@@ -1460,39 +1496,66 @@
     controlsBar.classList.remove('hidden');
     controlsBar.classList.add('visible');
     meterHud.classList.remove('controls-hidden');
+    bigPlayBtn.classList.remove('idle');
     document.body.style.cursor = 'default';
     clearTimeout(controlsTimeout);
-    if (!video.paused) {
-      controlsTimeout = setTimeout(hideControls, 3000);
-    }
+    // The timer runs while paused too: it only takes the big play button
+    // down then (see hideControls), so a paused frame can be screenshotted
+    // clean once the mouse has been still for a moment.
+    controlsTimeout = setTimeout(hideControls, 3000);
+  }
+
+  // Paused and not presenting: the operator is looking at a frame, so the
+  // transport stays up and only the big play button gets out of the way.
+  function hideBigPlayButton() {
+    bigPlayBtn.classList.add('idle');
+  }
+
+  // Whether the transport goes away on its own: while playing, and in
+  // presentation mode even when paused. Reverse shuttle drives a paused
+  // <video>, so it still counts as playing.
+  function transportAutoHides() {
+    return presentationMode || !(video.paused && shuttleDirection === 0);
   }
 
   function hideControls() {
     if (isTimelineDragging) return;
-    // Paused means the operator is looking at a frame, and the transport
-    // stays up for that — whichever timer happened to fire. Reverse shuttle
-    // drives a paused <video>, so it still counts as playing here.
-    if (video.paused && shuttleDirection === 0) return;
+    if (!transportAutoHides()) { hideBigPlayButton(); return; }
     controlsBar.classList.remove('visible');
     controlsBar.classList.add('hidden');
     // Fades the meter HUD out alongside the transport rather than hiding it,
     // so the metering loop keeps running and levels are already correct when
     // the mouse comes back.
     meterHud.classList.add('controls-hidden');
+    hideBigPlayButton();
     document.body.style.cursor = 'none';
   }
 
-  document.getElementById('video-container').addEventListener('mousemove', showControls);
+  // Going fullscreen puts the window under a pointer that has not moved, and
+  // that arrives as a mousemove (same screen position, or a position the
+  // window never saw). Only real motion brings the controls back, or
+  // presentation mode would open with the transport up for 3 s.
+  let lastPointerScreen = null;
+  document.getElementById('video-container').addEventListener('mousemove', (e) => {
+    if (lastPointerScreen && lastPointerScreen.x === e.screenX && lastPointerScreen.y === e.screenY) return;
+    lastPointerScreen = { x: e.screenX, y: e.screenY };
+    if (presentationMode && performance.now() - presentationEnteredAt < 1000) return;
+    showControls();
+  });
   document.getElementById('video-container').addEventListener('mouseleave', () => {
-    if (!video.paused && hasVideoLoaded) {
-      clearTimeout(controlsTimeout);
+    if (!hasVideoLoaded) return;
+    clearTimeout(controlsTimeout);
+    if (transportAutoHides()) {
       controlsTimeout = setTimeout(hideControls, 1500);
+    } else {
+      // Mouse moved off the picture while paused: clear the frame right away.
+      hideBigPlayButton();
     }
   });
 
   controlsBar.addEventListener('mouseenter', () => clearTimeout(controlsTimeout));
   controlsBar.addEventListener('mouseleave', () => {
-    if (!video.paused && hasVideoLoaded) {
+    if (transportAutoHides() && hasVideoLoaded) {
       // Leaving the window through the bar fires this AND the container's
       // mouseleave. Without the clear, the first timer was orphaned — the
       // pause handler could only cancel the second — and the controls
@@ -1624,7 +1687,11 @@
   });
   video.addEventListener('pause', () => {
     if (sdiActive) window.electronAPI.sdiPause();
-    updatePlayButton(); showControls(); clearTimeout(controlsTimeout);
+    updatePlayButton();
+    // Pausing brings the transport back (the auto-hide timer then only takes
+    // the big play button). In presentation mode nothing comes back: the
+    // picture stays clean until the mouse moves.
+    if (presentationMode) hideControls(); else showControls();
     if (secondaryAudio) secondaryAudio.pause();
   });
   video.addEventListener('ended', () => {
@@ -1908,7 +1975,15 @@
         // here — doing both fires toggleLoop twice and cancels itself out.
         if (!mod && !e.repeat) { e.preventDefault(); if (kHeld) slowShuttle(1); else shuttleForward(); }
         break;
-      case 'KeyF': if (!mod) { e.preventDefault(); toggleFullscreen(); } break;
+      // Bare F: fullscreen. Cmd/Ctrl+F: presentation fullscreen (picture
+      // only). Cmd/Ctrl+Shift+F is the Look & Framing menu accelerator.
+      case 'KeyF':
+        if (!mod) { e.preventDefault(); toggleFullscreen(); }
+        else if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
+          e.preventDefault();
+          if (!e.repeat) togglePresentation();
+        }
+        break;
       // M drops a marker at the source timecode — the NLE convention the
       // client asked for. Mute moved to Shift+M; Alt+M deletes the marker
       // under the playhead.
@@ -1922,6 +1997,10 @@
         audioPanel.classList.add('hidden');
         hideSequenceDialog();
         closeEditingUi();
+        // Esc leaves either fullscreen mode; presentation mode hides every
+        // other way out.
+        if (presentationMode) togglePresentation();
+        else if (document.body.classList.contains('is-fullscreen')) toggleFullscreen();
         break;
     }
   });
@@ -1974,6 +2053,8 @@
   window.electronAPI.onFrameStep((direction) => frameStep(direction));
   window.electronAPI.onVolumeChange((delta) => changeVolume(delta));
   window.electronAPI.onToggleMute(() => toggleMute());
+  window.electronAPI.onTogglePresentation(() => togglePresentation());
+  window.electronAPI.onFullscreenChange((isFs) => applyFullscreenState(isFs));
   window.electronAPI.onToggleFileInfo(() => togglePanel(fileInfoPanel));
   window.electronAPI.onShowShortcuts(() => togglePanel(shortcutsPanel));
 
@@ -4479,9 +4560,7 @@
   // ─── Fullscreen Polling ───────────────────────────────
 
   const checkFullscreen = async () => {
-    const isFs = await window.electronAPI.isFullscreen();
-    iconFsEnter.classList.toggle('hidden', isFs);
-    iconFsExit.classList.toggle('hidden', !isFs);
+    applyFullscreenState(await window.electronAPI.isFullscreen());
   };
   setInterval(checkFullscreen, 1000);
 

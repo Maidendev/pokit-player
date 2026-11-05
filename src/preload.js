@@ -7,6 +7,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getFileStats: (filePath) => ipcRenderer.invoke('get-file-stats', filePath),
   toggleFullscreen: () => ipcRenderer.invoke('toggle-fullscreen'),
   isFullscreen: () => ipcRenderer.invoke('is-fullscreen'),
+  onFullscreenChange: (callback) =>
+    ipcRenderer.on('fullscreen-changed', (_e, isFs) => callback(isFs)),
+  onTogglePresentation: (callback) => ipcRenderer.on('toggle-presentation', () => callback()),
   setWindowSize: (width, height) => ipcRenderer.invoke('set-window-size', width, height),
 
   // Transcoder operations

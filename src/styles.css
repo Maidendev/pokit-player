@@ -258,8 +258,17 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: transform var(--transition-fast), background var(--transition-fast);
+  transition: transform var(--transition-fast), background var(--transition-fast),
+    opacity var(--transition-normal);
   backdrop-filter: blur(4px);
+}
+
+/* Paused with the mouse still or off the picture: the button fades so the
+   frame can be looked at (or screenshotted) clean. Clicks fall through to
+   the <video>, which toggles play itself. */
+#big-play-btn.idle {
+  opacity: 0;
+  pointer-events: none;
 }
 
 #big-play-btn:hover {
@@ -1046,6 +1055,12 @@ body:-webkit-full-screen #controls-bar {
   bottom: 0;
   left: 0;
   right: 0;
+}
+
+/* Presentation fullscreen (Cmd/Ctrl+F): picture only. Electron's window
+   fullscreen never matches :fullscreen, so the renderer sets this class. */
+body.presentation #title-bar {
+  display: none;
 }
 
 /* Focus styles for accessibility */
