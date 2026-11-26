@@ -7,12 +7,17 @@
   <title>MaidenPlayer</title>
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="editing.css">
+  <link rel="stylesheet" href="notes.css">
 </head>
 <body>
   <div id="app">
     <!-- Title Bar (draggable region) -->
     <div id="title-bar">
       <div class="title-bar-drag"></div>
+      <div class="title-brand" role="img" aria-label="Maiden">
+        <img src="assets/maiden-lockup.png" alt="">
+        <img class="title-wordmark" src="assets/maiden-lockup.png" alt="">
+      </div>
       <div class="title-text" id="title-text">MaidenPlayer</div>
       <div class="sdi-badge hidden" id="sdi-badge" title="External video output"></div>
       <div class="look-badge hidden" id="lut-badge" title="LUT active (U toggles)"></div>
@@ -27,6 +32,7 @@
       <canvas id="lut-canvas" class="hidden"></canvas>
       <!-- Aspect-ratio mask and framing guides, drawn over whichever picture is up -->
       <canvas id="mask-canvas"></canvas>
+      <div id="notes-frame"><canvas></canvas><div id="notes-labels"></div><div id="notes-cards"></div></div>
       <!-- Caption overlay: rendered over picture, outside the video element so
            it survives transcoded and MSE-streamed playback alike -->
       <div id="caption-overlay" class="hidden"><div id="caption-text"></div></div>
@@ -60,7 +66,7 @@
           </svg>
           <h2>Drop a video or audio file here</h2>
           <p>or press <kbd>⌘O</kbd> / <kbd>Ctrl+O</kbd> to open</p>
-          <p class="formats-hint">Supported: MP4, WebM, MKV, AVI, MOV, ProRes, DNxHD/HR, MXF, Image Sequences, plus audio: MP3, WAV, FLAC, AAC, M4A, AIFF, OGG, Opus, WMA, AC-3 and more</p>
+          <p class="formats-hint">Supported: MP4, WebM, MKV, AVI, MOV, ProRes, DNxHD/HR, MXF, DCP (drop the folder), Image Sequences, plus audio: MP3, WAV, FLAC, AAC, M4A, AIFF, OGG, Opus, WMA, AC-3 and more</p>
         </div>
       </div>
 
@@ -312,6 +318,9 @@
           <button id="btn-add-marker" class="ctrl-btn" title="Add Marker (M)">
             <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 3h2v18H6V3zm2 1h11l-3 4.5 3 4.5H8V4z"/></svg>
           </button>
+          <button id="btn-picture-notes" class="ctrl-btn" title="Picture notes" aria-label="Picture notes" aria-controls="notes-panel" aria-expanded="false" disabled>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 4H5a2 2 0 0 0-2 2v13h13a2 2 0 0 0 2-2v-6M10 14l1-4 8-8 3 3-8 8z"/></svg>
+          </button>
         </div>
 
         <!-- Center: Timecode -->
@@ -420,6 +429,23 @@
     </div>
 
     <!-- Markers Panel -->
+    <aside id="notes-panel" hidden aria-label="Picture notes">
+      <header><strong>Picture notes</strong><label><input id="notes-visible" type="checkbox" checked> Show notes</label><button id="notes-close" aria-label="Close picture notes">×</button></header>
+      <div class="notes-body">
+        <button id="notes-new">+ Add note at playhead</button>
+        <div id="notes-editor" hidden>
+          <div class="notes-row"><output id="notes-time"></output><button id="notes-retime">Use playhead</button></div>
+          <label>Shows on <select id="notes-duration"><option value="frame">This frame</option><option value="1">1 second</option><option value="2">2 seconds</option><option value="5">5 seconds</option><option value="end">To end of clip</option><option value="custom">Custom</option></select></label>
+          <label id="notes-custom-row" hidden>Seconds <input id="notes-custom" type="number" min="0.001" step="any"></label>
+          <fieldset><legend>Tool</legend><div id="notes-tools"></div></fieldset>
+          <div class="notes-row"><div id="notes-colors"></div><select id="notes-weight" aria-label="Stroke weight"><option value=".004">Fine</option><option value=".009" selected>Medium</option><option value=".016">Bold</option></select></div>
+          <label>Comment<textarea id="notes-comment" maxlength="4000" rows="3" placeholder="Write a note about this frame"></textarea></label>
+          <div class="notes-row"><button id="notes-undo">Undo drawing</button><button id="notes-delete">Delete note</button></div>
+          <div class="notes-row notes-actions"><button id="notes-cancel">Cancel</button><button id="notes-apply">Apply</button></div>
+        </div>
+        <div id="notes-list"></div><p id="notes-status" role="status"></p>
+      </div>
+    </aside>
     <div id="markers-panel" class="hidden">
       <div class="info-panel-header">
         <h3>Markers <span id="markers-count" class="panel-count"></span></h3>
@@ -549,6 +575,7 @@
 
   <script src="lut.js"></script>
   <script src="masks.js"></script>
+  <script src="notes.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

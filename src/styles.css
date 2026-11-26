@@ -1,27 +1,31 @@
 /* ============================================
-   Pro Video Player — DaVinci Resolve-inspired
+   MaidenPlayer — Maiden workspace theme
    ============================================ */
 
 :root {
-  --bg-primary: #1a1a1a;
-  --bg-secondary: #222222;
-  --bg-tertiary: #2a2a2a;
-  --bg-controls: rgba(24, 24, 24, 0.92);
-  --bg-panel: #1e1e1e;
-  --text-primary: #e0e0e0;
-  --text-secondary: #999999;
-  --text-muted: #666666;
-  --accent: #8032d4;
-  --accent-hover: #9550e0;
-  --accent-glow: rgba(128, 50, 212, 0.3);
-  --timeline-bg: #333333;
-  --timeline-buffered: #444444;
-  --timeline-progress: #8032d4;
+  color-scheme: dark;
+  --bg-primary: hsl(217 19% 9%);
+  --bg-secondary: hsl(217 24% 13%);
+  --bg-tertiary: hsl(220 14% 20%);
+  --bg-panel: hsl(217 30% 11%);
+  --bg-controls: var(--bg-panel);
+  --text-primary: hsl(240 5% 90%);
+  --text-secondary: hsl(220 9% 73%);
+  --text-muted: hsl(220 9% 66%);
+  --accent: hsl(258 90% 58%);
+  --accent-hover: hsl(258 90% 75%);
+  --accent-glow: hsl(258 90% 58% / .22);
+  --button-hover: hsl(258 42% 25%);
+  --button-hover-text: hsl(258 100% 93%);
+  --timeline-bg: var(--bg-tertiary);
+  --timeline-buffered: hsl(220 14% 35%);
+  --timeline-progress: var(--accent);
   --timeline-thumb: #ffffff;
-  --border-color: #333333;
+  --border-color: hsl(220 14% 24%);
+  --border: var(--border-color);
   --danger: #e74c3c;
   --success: #2ecc71;
-  --radius: 4px;
+  --radius: 6px;
   --transition-fast: 150ms ease;
   --transition-normal: 250ms ease;
 }
@@ -39,7 +43,7 @@ html, body {
   overflow: hidden;
   background: var(--bg-primary);
   color: var(--text-primary);
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'SF Pro Text', 'Helvetica Neue', Arial, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
   font-size: 13px;
   line-height: 1.4;
   user-select: none;
@@ -57,10 +61,12 @@ html, body {
 /* Title Bar — overlay so the video centers in the full viewport */
 #title-bar {
   height: 38px;
-  background: linear-gradient(to bottom, rgba(10, 12, 16, 0.85) 0%, rgba(10, 12, 16, 0.45) 70%, rgba(10, 12, 16, 0) 100%);
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border-color);
+  padding-inline: 14px;
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   position: absolute;
   top: 0;
   left: 0;
@@ -69,6 +75,8 @@ html, body {
   pointer-events: none;
   transition: opacity var(--transition-normal);
 }
+
+body.macos #title-bar { padding-inline-start: 82px; }
 
 /* Keep the drag region interactive even though the bar itself ignores pointer events */
 #title-bar .title-bar-drag {
@@ -82,6 +90,10 @@ html, body {
 }
 
 .title-text {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  min-width: 0;
   font-size: 12px;
   font-weight: 500;
   color: var(--text-secondary);
@@ -89,10 +101,32 @@ html, body {
   pointer-events: none;
 }
 
+.title-brand {
+  display: grid;
+  flex: none;
+  margin-inline-end: 12px;
+  padding-inline-end: 12px;
+  border-inline-end: 1px solid var(--border-color);
+}
+
+.title-brand img {
+  grid-area: 1 / 1;
+  height: 30px;
+  width: auto;
+  display: block;
+}
+
+/* The gap between the waveform and the lettering is at 33% of the artwork.
+   Reinforce the white hairlines where subpixel sampling thins them out. */
+.title-wordmark {
+  clip-path: inset(0 0 0 33%);
+  filter: brightness(0) invert(1) drop-shadow(0 0 0 white) drop-shadow(0 0 .35px white);
+}
+
 /* Video Container — fills the entire viewport for perfect centering */
 #video-container {
   position: absolute;
-  top: 0;
+  top: 38px;
   left: 0;
   right: 0;
   bottom: 0;
@@ -177,7 +211,7 @@ html, body {
 .drop-icon {
   width: 80px;
   height: 80px;
-  color: var(--text-muted);
+  color: var(--accent-hover);
   margin-bottom: 20px;
 }
 
@@ -296,7 +330,7 @@ html, body {
   backdrop-filter: blur(12px);
   z-index: 20;
   transition: opacity var(--transition-normal), transform var(--transition-normal);
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  border-top: 1px solid var(--border-color);
 }
 
 #controls-bar.hidden {
@@ -421,11 +455,6 @@ html, body {
   align-items: center;
   justify-content: center;
   transition: color var(--transition-fast), background var(--transition-fast);
-}
-
-.ctrl-btn:hover {
-  color: var(--text-primary);
-  background: rgba(255, 255, 255, 0.06);
 }
 
 .ctrl-btn:active {
@@ -1063,6 +1092,9 @@ body.presentation #title-bar {
   display: none;
 }
 
+body.presentation #video-container,
+body:fullscreen #video-container { top: 0; }
+
 /* Focus styles for accessibility */
 .ctrl-btn:focus-visible {
   outline: 2px solid var(--accent);
@@ -1317,11 +1349,20 @@ body.presentation #title-bar {
    state is readable across a dark screening room at a glance. Uses the brand
    variables rather than its own colour, so the accent lives in one place. */
 .ctrl-btn.active {
-  color: var(--accent);
+  color: var(--accent-hover);
   background: var(--accent-glow);
 }
-.ctrl-btn.active:hover {
-  filter: brightness(1.25);
+/* One rollover for transport, dialogs, inspectors and dynamically added controls.
+   The inset ring also works on borderless icons without changing their size. */
+#app button:not(:disabled):is(:hover, :focus-visible) {
+  background-color: var(--button-hover);
+  border-color: var(--accent-hover);
+  color: var(--button-hover-text);
+  box-shadow: inset 0 0 0 1px var(--accent-hover);
+}
+#app button:focus-visible {
+  outline: 2px solid var(--accent-hover);
+  outline-offset: 2px;
 }
 
 /* External video output badge, beside the title. Shows which device playback

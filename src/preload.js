@@ -2,8 +2,12 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
   // File operations
+  readPictureNotes: (mediaPath) => ipcRenderer.invoke('read-picture-notes', mediaPath),
   openFileDialog: () => ipcRenderer.invoke('open-file-dialog'),
   openImageSequenceDialog: () => ipcRenderer.invoke('open-image-sequence-dialog'),
+  // DCP: a folder, or any file inside one → { cplPath, title } | null
+  openDcpDialog: () => ipcRenderer.invoke('open-dcp-dialog'),
+  resolveDcp: (inputPath) => ipcRenderer.invoke('dcp-resolve', inputPath),
   getFileStats: (filePath) => ipcRenderer.invoke('get-file-stats', filePath),
   toggleFullscreen: () => ipcRenderer.invoke('toggle-fullscreen'),
   isFullscreen: () => ipcRenderer.invoke('is-fullscreen'),
@@ -78,6 +82,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onStreamData: (callback) => ipcRenderer.on('stream-data', (_e, data) => callback(data)),
   onStreamEnd: (callback) => ipcRenderer.on('stream-end', () => callback()),
   onStreamError: (callback) => ipcRenderer.on('stream-error', (_e, msg) => callback(msg)),
+  // The main process wants the stream started again from where it is (the
+  // DCP decode resolution changed). info: { reason }
+  onStreamRestart: (callback) => ipcRenderer.on('stream-restart', (_e, info) => callback(info)),
   onStreamReady: (callback) => ipcRenderer.on('stream-ready', (_e, info) => callback(info)),
 
   // ─── Media editing (QuickTime 7 Pro-style operations) ───────────────────

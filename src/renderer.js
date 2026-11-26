@@ -26,6 +26,7 @@
   const bigPlayBtn = document.getElementById('big-play-btn');
   const controlsBar = document.getElementById('controls-bar');
   const titleText = document.getElementById('title-text');
+  document.body.classList.toggle('macos', navigator.platform.startsWith('Mac'));
 
   // Controls
   const btnPlay = document.getElementById('btn-play');
@@ -784,6 +785,14 @@
   function handleStreamError(msg) {
     console.error('[Renderer] Stream error:', msg);
 
+    // A DCP has no full-transcode fallback: that path reads one media file.
+    if (!firstDataReceived && currentProbeInfo && currentProbeInfo.isDcp) {
+      cleanupMSE();
+      hideTranscodeOverlay();
+      alert('DCP playback could not start:\n\n' + msg);
+      return;
+    }
+
     // If we haven't received any data, fall back to full transcode
     if (!firstDataReceived) {
       console.log('[Renderer] No data received — falling back to full transcode');
@@ -807,35 +816,53 @@
   // up. While one is in flight only the LATEST requested time is kept.
   let seekInFlight = false;
   let queuedSeekTime = null;
+  let queuedSeekRestart = null;
 
-  async function seekInStream(time) {
+  /**
+   * @param {number} time
+   * @param {string} [restartReason]  Set to restart the decoder even when the
+   *   target is already buffered — what is buffered was decoded with settings
+   *   that have since changed. The text is shown while it restarts.
+   */
+  async function seekInStream(time, restartReason) {
     if (!streamMode) return;
     if (seekInFlight) {
       queuedSeekTime = time;
+      // A plain seek queued behind a restart must not cancel the restart.
+      queuedSeekRestart = restartReason || queuedSeekRestart;
       return;
     }
     seekInFlight = true;
     try {
-      await seekInStreamNow(time);
+      await seekInStreamNow(time, restartReason);
     } finally {
       seekInFlight = false;
       if (queuedSeekTime !== null) {
         const next = queuedSeekTime;
+        const nextRestart = queuedSeekRestart;
         queuedSeekTime = null;
-        seekInStream(next);
+        queuedSeekRestart = null;
+        seekInStream(next, nextRestart);
       }
     }
   }
 
-  async function seekInStreamNow(time) {
+  async function seekInStreamNow(time, restartReason) {
     if (!streamMode) return;
 
     // Clamp
     const duration = currentProbeInfo ? currentProbeInfo.duration : video.duration;
     time = Math.max(0, Math.min(duration || Infinity, time));
 
+    // A DCP's decoder starts on a whole frame. Ask for one, so the offset the
+    // new fragments are stamped with is exactly where their first frame is —
+    // otherwise every frame after a restart shows a fraction of a frame late.
+    if (currentProbeInfo && currentProbeInfo.isDcp && currentProbeInfo.fps > 0) {
+      time = Math.round(time * currentProbeInfo.fps) / currentProbeInfo.fps;
+    }
+
     // Check if target is within buffered range
-    if (sourceBuffer && sourceBuffer.buffered.length > 0) {
+    if (!restartReason && sourceBuffer && sourceBuffer.buffered.length > 0) {
       for (let i = 0; i < sourceBuffer.buffered.length; i++) {
         const start = sourceBuffer.buffered.start(i);
         const end = sourceBuffer.buffered.end(i);
@@ -851,7 +878,8 @@
     console.log('[Renderer] Seeking outside buffer — restarting stream at:', time);
     // While dragging the playhead the picture follows it live; a full-screen
     // spinner on every step would hide exactly what the operator is scrubbing.
-    if (!isTimelineDragging) showTranscodeOverlay('Seeking…', '');
+    if (restartReason) showTranscodeOverlay(restartReason, '');
+    else if (!isTimelineDragging) showTranscodeOverlay('Seeking…', '');
 
     // A seek must not change the transport state: resume only if the operator
     // was playing. Reverse shuttle drives a paused <video>, so it stays put.
@@ -928,6 +956,18 @@
       return await tryOpenAsSequence(filePath);
     }
 
+    // A DCP is a folder, not a file. The folder itself, its ASSETMAP or CPL,
+    // or one of its MXF track files all open the composition — by its CPL,
+    // which is "the file" from here on. An .mxf or .xml that belongs to no
+    // DCP comes back null and opens the ordinary way.
+    if (ext === '.mxf' || ext === '.xml' || !SUPPORTED_EXTENSIONS.includes(ext)) {
+      let found = null;
+      try { found = await window.electronAPI.resolveDcp(filePath); } catch (_) { found = null; }
+      if (found && found.canceled) return;
+      if (found && found.error) { alert('This DCP could not be opened:\n\n' + found.error); return; }
+      if (found && found.cplPath) return await openVideoFile(found.cplPath);
+    }
+
     // For video files: probe and potentially transcode
     await openVideoFile(filePath);
   }
@@ -983,6 +1023,17 @@
     currentProbeInfo = probe;
     console.log('[Renderer] Probe result:', JSON.stringify(probe));
 
+    if (probe.error && probe.isDcp) {
+      // Encrypted, 3D, or track files missing: there is nothing to fall back
+      // to, and the reason is the whole message.
+      console.warn('[Renderer] DCP cannot be played:', probe.error);
+      hideTranscodeOverlay();
+      currentProbeInfo = null;
+      alert(probe.error);
+      if (!hasVideoLoaded) showDropZone();
+      return;
+    }
+
     if (probe.error) {
       console.warn('[Renderer] Probe returned error:', probe.error);
       hideTranscodeOverlay();
@@ -1035,8 +1086,9 @@
         // Data will arrive via IPC → appendStreamData → auto-play
         console.log('[Renderer] MSE streaming initialized — waiting for data');
 
-        // Show controls
-        const fileName = filePath.split(/[\\/]/).pop();
+        // Show controls. A DCP is named by its composition, not by the
+        // CPL_<uuid>.xml that happens to carry it.
+        const fileName = (probe.isDcp && probe.dcp && probe.dcp.title) || filePath.split(/[\\/]/).pop();
         titleText.textContent = fileName + ' — MaidenPlayer';
         document.title = fileName + ' — MaidenPlayer';
         dropZone.classList.remove('visible');
@@ -1799,7 +1851,13 @@
       if (SUPPORTED_EXTENSIONS.includes(ext)) {
         openFile(filePath);
       } else {
-        console.warn('[Renderer] Unsupported extension dropped:', ext);
+        // Not a media file by its name — but a DCP is dropped as a folder
+        // (or by its ASSETMAP / CPL), so ask before turning it away.
+        window.electronAPI.resolveDcp(filePath).then((found) => {
+          if (found && found.error) alert('This DCP could not be opened:\n\n' + found.error);
+          else if (found && found.cplPath) openVideoFile(found.cplPath);
+          else if (!found) console.warn('[Renderer] Unsupported extension dropped:', ext);
+        }).catch(() => {});
       }
     }
   });
@@ -2071,6 +2129,13 @@
   window.electronAPI.onStreamData((data) => appendStreamData(data));
   window.electronAPI.onStreamEnd(() => handleStreamEnd());
   window.electronAPI.onStreamError((msg) => handleStreamError(msg));
+  // The DCP decode resolution changed (the operator's choice, or the decoder
+  // could not keep up): everything buffered was made the old way, so start
+  // again from the playhead.
+  window.electronAPI.onStreamRestart((info) => {
+    if (!streamMode || !currentProbeInfo || !currentProbeInfo.isDcp) return;
+    seekInStream(video.currentTime || 0, (info && info.reason) || 'Restarting playback…');
+  });
 
   // ─── File Info ────────────────────────────────────────
 
@@ -3256,6 +3321,7 @@
   }
 
   function onMediaChanged(filePath) {
+    pictureNotes.load(filePath);
     inPoint = null;
     outPoint = null;
     playingSelection = false;
@@ -4567,6 +4633,7 @@
   // ─── Initial State ────────────────────────────────────
   updateVolumeIcon();
   updatePlayButton();
+  const pictureNotes = window.createPictureNotes({ video, fps: () => frameRate, tc: tcOf, seek: seekTo, duration: () => currentProbeInfo?.duration || video.duration });
   console.log('[Renderer] MaidenPlayer v1.5.1 initialized');
 
 })();

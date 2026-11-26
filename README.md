@@ -54,6 +54,13 @@ Deep inspection via ffprobe, in a summary view with an expandable **Advanced** s
   WMV/ASF, MKV, WebM, AVI, MJ2
 - **Video codecs** — H.264, HEVC (incl. 4K), MPEG-2, Apple ProRes (Proxy/LT/422/HQ/4444/4444 XQ),
   DNxHD & DNxHR, JPEG 2000, VC-1, Windows Media
+- **DCP** — a Digital Cinema Package opens by its folder (File ▸ Open DCP…), its
+  ASSETMAP or CPL, or one of its track files. SMPTE and Interop, any number of
+  reels, 2K and 4K JPEG 2000 with 5.1 sound. A version file (VF) finds its OV
+  beside it or asks for the folder. An encrypted package plays with a KDM made
+  for this player: File ▸ Export Player Certificate…, then File ▸ Load KDM….
+  Desktop playback only for now; Playback ▸ DCP Decode Resolution steps down to
+  half size when full size cannot be decoded in realtime.
 - **Blackmagic RAW** — `.braw` plays through Blackmagic's own SDK, since FFmpeg
   has no Blackmagic RAW decoder. Needs the `braw-decode` helper to be built and
   bundled; see [native/braw-decode](native/braw-decode/README.md). Video only

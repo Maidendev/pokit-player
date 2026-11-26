@@ -12,8 +12,43 @@ the effort. Sections that shipped are listed at the bottom for reference.
 
 ## §1 — IMF / DCP Playback
 
-**Why pinned:** This is a composition engine, not a codec problem. Nothing in the current
-architecture models "one timeline assembled from many essence files."
+**Shipped 2026-11-25 — DCP playback on the desktop** (`src/dcp.js`). File ▸ Open DCP…,
+or drop the folder, its ASSETMAP / CPL, or a track file. SMPTE and Interop, any number of
+reels joined on the exact frame, 2K and 4K, 5.1 sound from 6/8/16-channel track files.
+3D packages are detected and reported, not played.
+
+**Added 2026-11-25 — version files and encrypted packages.**
+- **VF + OV.** A version file's borrowed track files are found by UUID in the packages
+  beside it; otherwise the player asks for the OV folder and remembers it
+  (`dcp-links.json` in userData).
+- **KDM.** File ▸ Export Player Certificate… writes this installation's certificate
+  (`src/dcp-kdm.js`: RSA 2048 chain, ST 430-2 profile, private key under the OS keychain);
+  File ▸ Load KDM… takes a KDM made for it, and a KDM lying in the DCP's folder is picked
+  up without asking. Picture is decrypted by FFmpeg (`-cryptokey`, bit-identical to the
+  plaintext, checked); **sound is decrypted in `src/dcp-mxf.js`**, because FFmpeg 6.1
+  mis-times decrypted sound after a seek. Tested against track files encrypted with a test
+  tool written to ST 429-6 and a test KDM — **not yet against a DCP and KDM from a real
+  mastering tool**; that is the open check. KDM signatures and per-frame MIC are not
+  verified. Inspector, frame strip and loudness refuse an encrypted DCP.
+
+**Still pinned for DCP:**
+- **Full-resolution realtime.** Measured on a 16-thread desktop, bundled FFmpeg 6.1, a 2K
+  105 Mbit/s DCP: the JPEG 2000 decode alone tops out at 27–32 fps and the X'Y'Z' → video
+  conversion was the slower stage. With the scaler threaded (shipped) the whole pipeline
+  runs ~20–23 fps at full size and ~60–75 at half, so Playback → DCP Decode Resolution →
+  Auto still steps down to half (999×540 for 2K Flat). Two FFmpeg processes and a 3D LUT
+  were tried and are no faster. Full size at speed needs a faster JPEG 2000 decoder
+  (Grok, Kakadu or nvJPEG2000) in a native helper, like the raw formats. That helper has
+  to be developed where a C++ compiler is allowed: CI, or this machine with permission.
+- **External video output (SDI).** `sdi-start` refuses a DCP: that decode reads one media
+  file, and the reel path has not been built or tested against a card.
+- **Subtitles / closed captions** (`MainSubtitle`, `ClosedCaption` reels) are not drawn.
+- **Stereoscopic 3D.**
+- **Loudness** is measured for single-reel packages only; export and save-frame do not
+  take a DCP as their source yet.
+
+**IMF is not started.** What follows is the original note; items 1–3 now exist for DCP
+and are the starting point for an IMF CPL (ST 2067) reader.
 
 **What it takes:**
 1. CPL XML parser (SMPTE ST 2067 for IMF, SMPTE/Interop for DCP) — resolve

@@ -1,6 +1,18 @@
-const { app, BrowserWindow, ipcMain, dialog, Menu, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu, shell, safeStorage } = require('electron');
 const path = require('path');
 const fs = require('fs');
+ipcMain.handle('read-picture-notes', async (_event, mediaPath) => {
+  const filename = mediaPath + '.maiden-notes.json';
+  try {
+    const stat = await fs.promises.stat(filename);
+    if (stat.size > 16 * 1024 * 1024) throw new Error('Picture notes exceed 16 MB.');
+    const data = await fs.promises.readFile(filename, 'utf8');
+    return { data, revision: require('crypto').createHash('sha256').update(data).digest('hex') };
+  } catch (error) {
+    if (error.code === 'ENOENT') return { revision: 'local' };
+    throw error;
+  }
+});
 const transcoder = require('./transcoder');
 const inspector = require('./inspector');
 const loudness = require('./loudness');
@@ -8,12 +20,179 @@ const captions = require('./captions');
 const { StreamDecoder } = require('./stream-decoder');
 const braw = require('./braw');
 const sdi = require('./sdi');
+const dcp = require('./dcp');
 const editor = require('./editor');
 const { autoUpdater } = require('electron-updater');
 
 let mainWindow = null;
 let streamDecoder = null; // Singleton stream decoder instance
 let streamProbeCache = null; // { filePath, mtimeMs, size, probe } for the last stream start
+
+// ─── DCP playback ────────────────────────────────────────────────────────────
+// A DCP is opened by its CPL: that XML's path is "the file" everywhere else in
+// the player, and src/dcp.js turns it into reels for the stream decoder.
+//
+// JPEG 2000 can be decoded at a fraction of its size for a fraction of the
+// cost, and in software that is the difference between realtime and not.
+// 'auto' starts at dcp.defaultLowres() and drops a level, for the rest of the
+// session, the first time the decoder reports it cannot keep up; a number
+// (0 full, 1 half, 2 quarter) is the operator overriding that.
+let dcpResolution = 'auto';
+let dcpAutoStep = 0;           // extra levels 'auto' has had to drop this session
+
+/** Is this path a DCP's Composition Playlist? */
+function isDcpPath(filePath) {
+  return typeof filePath === 'string' && path.extname(filePath).toLowerCase() === '.xml' && dcp.isCplFile(filePath);
+}
+
+function dcpLowresFor(probe) {
+  const max = dcp.maxLowres(probe);
+  if (dcpResolution === 'auto') return Math.min(max, dcp.defaultLowres(probe) + dcpAutoStep);
+  return Math.min(max, dcpResolution);
+}
+
+function setDcpResolution(value) {
+  dcpResolution = value;
+  buildMenu();
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('stream-restart', { reason: 'Changing DCP decode resolution…' });
+  }
+}
+
+function dcpResolutionSubmenu() {
+  const item = (label, value) => ({
+    label, type: 'radio', checked: dcpResolution === value, click: () => setDcpResolution(value),
+  });
+  return [
+    item('Auto (keep playback realtime)', 'auto'),
+    { type: 'separator' },
+    item('Full', 0),
+    item('Half', 1),
+    item('Quarter', 2),
+  ];
+}
+
+/**
+ * For the tools that read one media file (inspector, loudness): the track
+ * file of a DCP's first reel that holds what they are after.
+ */
+function dcpTrackFile(cplPath, which) {
+  const comp = dcp.parseCpl(cplPath);
+  const track = comp.reels[0] && comp.reels[0][which];
+  if (!track || !track.path) throw new Error('This DCP has no ' + which + ' track file to read.');
+  // These tools hand the file to ffprobe/ffmpeg as it is, and an encrypted
+  // track file is noise without its key.
+  if (track.keyId) throw new Error('This is not available for encrypted DCPs.');
+  return track.path;
+}
+
+// ─── DCP: version files and encrypted packages ───────────────────────────────
+
+/** Ask for the folder holding a version file's original version. → true when it helped. */
+async function locateOvDialog(cplPath) {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Locate the OV (original version) DCP folder',
+    properties: ['openDirectory'],
+  });
+  if (result.canceled || !result.filePaths.length) return false;
+  const linked = dcp.linkOv(cplPath, result.filePaths[0]);
+  if (linked.error) {
+    await dialog.showMessageBox(mainWindow, { type: 'warning', title: 'Locate OV', message: 'That is not the OV for this DCP', detail: linked.error });
+    return false;
+  }
+  return true;
+}
+
+/** Pick a KDM file and take it in. → true when a KDM was accepted and is usable now. */
+async function loadKdmDialog() {
+  if (!mainWindow) return false;
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Load KDM',
+    properties: ['openFile'],
+    filters: [{ name: 'KDM', extensions: ['xml'] }, { name: 'All Files', extensions: ['*'] }],
+  });
+  if (result.canceled || !result.filePaths.length) return false;
+  const loaded = dcp.loadKdm(result.filePaths[0]);
+  if (loaded.error) {
+    await dialog.showMessageBox(mainWindow, { type: 'warning', title: 'Load KDM', message: 'This KDM cannot be used', detail: loaded.error });
+    return false;
+  }
+  const when = (t) => { const d = new Date(t); return isNaN(d) ? String(t) : d.toLocaleString(); };
+  await dialog.showMessageBox(mainWindow, {
+    type: loaded.warning ? 'warning' : 'info',
+    title: 'Load KDM',
+    message: loaded.warning ? 'KDM loaded, but it cannot be used right now' : 'KDM loaded',
+    detail: (loaded.title || 'Composition ' + loaded.cplId) + '\n' +
+      loaded.keys + ' content key(s)\n' +
+      'Valid from ' + when(loaded.notBefore) + '\n' +
+      'Valid until ' + when(loaded.notAfter) +
+      (loaded.warning ? '\n\n' + loaded.warning : ''),
+  });
+  return !loaded.warning;
+}
+
+/** Save this player's certificate, for whoever will issue KDMs to it. */
+async function exportCertificateDialog() {
+  if (!mainWindow) return;
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: 'Export Player Certificate',
+    defaultPath: path.join(app.getPath('documents'), 'MaidenPlayer-certificate.pem'),
+    filters: [{ name: 'Certificate', extensions: ['pem'] }],
+  });
+  if (result.canceled || !result.filePath) return;
+  try {
+    const out = dcp.exportCertificate(result.filePath);
+    await dialog.showMessageBox(mainWindow, {
+      type: 'info',
+      title: 'Export Player Certificate',
+      message: 'Certificate saved',
+      detail: 'Send this file to whoever issues the KDM, and ask for a KDM made for it:\n' + out.leaf +
+        '\n\nSome issuers ask for the whole certificate chain instead. That is saved beside it:\n' + out.chain +
+        '\n\nThis player is:\n' + out.subject +
+        '\n\nThe certificate belongs to this installation on this computer. A KDM made for it will not open on another.',
+    });
+  } catch (err) {
+    dialog.showMessageBox(mainWindow, { type: 'error', title: 'Export Player Certificate', message: 'Could not export the certificate', detail: err.message });
+  }
+}
+
+/**
+ * Probe a DCP, and when the only thing in the way is something the operator
+ * can supply — the OV a version file borrows from, or a KDM — ask for it and
+ * try again.
+ */
+async function probeDcp(cplPath) {
+  let info = await dcp.probe(cplPath);
+  for (let tries = 0; tries < 6 && info.error && mainWindow && (info.needsOv || info.needsKdm); tries++) {
+    if (info.needsOv) {
+      const { response } = await dialog.showMessageBox(mainWindow, {
+        type: 'question',
+        title: 'Open DCP',
+        message: 'This is a version file (VF). Where is its original version (OV)?',
+        detail: (info.title || '') + '\n\nA VF holds only what it changes; the rest of its picture and sound is in the OV package, ' +
+          'which was not found beside it. Point MaidenPlayer at the OV folder and it will be remembered.',
+        buttons: ['Locate OV Folder…', 'Cancel'],
+        defaultId: 0,
+        cancelId: 1,
+      });
+      if (response !== 0 || !(await locateOvDialog(cplPath))) break;
+    } else {
+      const { response } = await dialog.showMessageBox(mainWindow, {
+        type: 'question',
+        title: 'Open DCP',
+        message: 'This DCP is encrypted and needs a KDM',
+        detail: info.error,
+        buttons: ['Load KDM…', 'Export Player Certificate…', 'Cancel'],
+        defaultId: 0,
+        cancelId: 2,
+      });
+      if (response === 1) { await exportCertificateDialog(); break; }
+      if (response !== 0 || !(await loadKdmDialog())) break;
+    }
+    info = await dcp.probe(cplPath);
+  }
+  return info;
+}
 
 /** Send a named editing command to the renderer (menu → player). */
 function sendEdit(name, payload) {
@@ -306,7 +485,7 @@ function createWindow() {
     height: 800,
     minWidth: 800,
     minHeight: 500,
-    backgroundColor: '#1a1a1a',
+    backgroundColor: '#13161b',
     icon: getIconPath(),
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     frame: true,
@@ -364,6 +543,8 @@ function getFileFromArgs(argv) {
     if (ALL_EXTENSIONS.includes(ext) && fs.existsSync(arg)) {
       return arg;
     }
+    // A DCP folder, or its ASSETMAP / CPL, dropped on the app icon.
+    if (fs.existsSync(arg) && dcp.resolve(arg)) return arg;
   }
   return null;
 }
@@ -391,6 +572,19 @@ function buildMenu() {
           label: 'Open Image Sequence…',
           accelerator: 'CmdOrCtrl+Shift+O',
           click: () => openImageSequenceDialog(),
+        },
+        {
+          label: 'Open DCP…',
+          accelerator: 'CmdOrCtrl+Shift+D',
+          click: () => openDcpDialog(),
+        },
+        {
+          label: 'Load KDM…',
+          click: () => loadKdmDialog(),
+        },
+        {
+          label: 'Export Player Certificate…',
+          click: () => exportCertificateDialog(),
         },
         { type: 'separator' },
         // ── QuickTime 7 Pro-style utilities. Everything here saves a NEW file
@@ -530,6 +724,10 @@ function buildMenu() {
           // device over SDI. Devices are enumerated by the sdi-out helper.
           label: 'External Video Output',
           submenu: sdiOutputSubmenu(),
+        },
+        {
+          label: 'DCP Decode Resolution',
+          submenu: dcpResolutionSubmenu(),
         },
         { type: 'separator' },
         {
@@ -773,6 +971,12 @@ async function openFileDialog() {
         name: 'Image Sequence Files',
         extensions: ['dpx', 'exr', 'tif', 'tiff', 'png', 'jpg', 'jpeg'],
       },
+      {
+        // Any file of the package opens the composition; File ▸ Open DCP…
+        // takes the folder itself.
+        name: 'DCP (ASSETMAP, CPL or track file)',
+        extensions: ['xml', 'mxf'],
+      },
       { name: 'All Files', extensions: ['*'] },
     ],
   });
@@ -780,6 +984,27 @@ async function openFileDialog() {
   if (!result.canceled && result.filePaths.length > 0) {
     mainWindow.webContents.send('open-file', result.filePaths[0]);
   }
+}
+
+/** A DCP is a folder, so it gets a folder picker of its own. */
+async function openDcpDialog() {
+  if (!mainWindow) return;
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Open DCP (select the DCP folder)',
+    properties: ['openDirectory'],
+  });
+  if (result.canceled || !result.filePaths.length) return;
+  const folder = result.filePaths[0];
+  if (!dcp.resolve(folder)) {
+    dialog.showMessageBox(mainWindow, {
+      type: 'warning',
+      title: 'Open DCP',
+      message: 'That folder is not a DCP',
+      detail: 'A DCP folder holds an ASSETMAP, a CPL and the picture and sound MXF track files.\n\n' + folder,
+    });
+    return;
+  }
+  mainWindow.webContents.send('open-file', folder);
 }
 
 async function openImageSequenceDialog() {
@@ -813,8 +1038,65 @@ ipcMain.handle('open-image-sequence-dialog', async () => {
   await openImageSequenceDialog();
 });
 
+ipcMain.handle('open-dcp-dialog', async () => {
+  await openDcpDialog();
+});
+
+/**
+ * Does this path belong to a DCP? Resolves to { cplPath, title } — the CPL is
+ * what the renderer then opens — or null for an ordinary file. A package with
+ * several compositions asks which one, unless the CPL itself was picked.
+ */
+ipcMain.handle('dcp-resolve', async (_event, inputPath) => {
+  try {
+    const found = dcp.resolve(inputPath);
+    if (!found) return null;
+    let chosen = found.cpls.find((c) => c.path === found.preferred) || found.cpls[0];
+    const pickedOne = path.extname(inputPath).toLowerCase() === '.xml' && isDcpPath(inputPath) ||
+                      path.extname(inputPath).toLowerCase() === '.mxf';
+    if (found.cpls.length > 1 && !pickedOne && mainWindow) {
+      const shown = found.cpls.slice(0, 8);
+      const { response } = await dialog.showMessageBox(mainWindow, {
+        type: 'question',
+        title: 'Open DCP',
+        message: 'This DCP holds ' + found.cpls.length + ' compositions. Which one?',
+        buttons: shown.map((c) => c.title).concat('Cancel'),
+        cancelId: shown.length,
+        defaultId: 0,
+      });
+      if (response >= shown.length) return { canceled: true };
+      chosen = shown[response];
+    }
+    console.log('[Main] DCP:', chosen.title, '→', chosen.path);
+    return { cplPath: chosen.path, title: chosen.title };
+  } catch (err) {
+    console.error('[Main] DCP resolve error:', err.message);
+    return { error: err.message };
+  }
+});
+
 ipcMain.handle('get-file-stats', async (_event, filePath) => {
   try {
+    if (isDcpPath(filePath)) {
+      // The CPL is a 2 kB XML; what the operator means by "the file" is the
+      // package, so report the folder and the weight of its track files.
+      const comp = dcp.parseCpl(filePath);
+      const stats = fs.statSync(filePath);
+      let size = 0;
+      for (const r of comp.reels) {
+        for (const t of [r.picture, r.sound]) {
+          if (t && t.path) { try { size += fs.statSync(t.path).size; } catch (_) { /* missing */ } }
+        }
+      }
+      return {
+        size,
+        created: stats.birthtime.toISOString(),
+        modified: stats.mtime.toISOString(),
+        name: comp.title,
+        extension: 'dcp',
+        directory: comp.dir,
+      };
+    }
     const stats = fs.statSync(filePath);
     return {
       size: stats.size,
@@ -840,6 +1122,14 @@ ipcMain.handle('probe-file', async (_event, filePath) => {
       console.log('[Main] Probe result: braw', info.codecFriendly, info.width + 'x' + info.height);
       return info;
     }
+    // A DCP's CPL: the composition answers, not ffmpeg (which sees an XML).
+    if (isDcpPath(filePath)) {
+      const info = await probeDcp(filePath);
+      if (info.error) console.error('[Main] DCP probe:', info.error);
+      else console.log('[Main] Probe result: dcp', info.codecFriendly, info.width + 'x' + info.height,
+        info.dcp.reels.length + ' reel(s)', info.dcp.totalFrames + ' frames @ ' + info.fps);
+      return info;
+    }
 
     const result = await transcoder.probeFile(filePath);
     console.log('[Main] Probe result:', result.codec, result.codecFriendly, 'transcode:', result.needsTranscode);
@@ -859,6 +1149,10 @@ ipcMain.handle('inspect-file', async (_event, filePath) => {
     if (braw.isBrawFile(filePath)) {
       return await braw.inspect(filePath);
     }
+    // A DCP: inspect the first reel's picture track file.
+    if (isDcpPath(filePath)) {
+      return await inspector.inspectFile(dcpTrackFile(filePath, 'picture'));
+    }
 
     return await inspector.inspectFile(filePath);
   } catch (err) {
@@ -870,6 +1164,7 @@ ipcMain.handle('inspect-file', async (_event, filePath) => {
 // Per-frame picture types + sizes for the GOP / data-rate strip
 ipcMain.handle('probe-frames', async (_event, filePath, startTime, duration) => {
   try {
+    if (isDcpPath(filePath)) filePath = dcpTrackFile(filePath, 'picture');
     return await inspector.probeFrames(filePath, startTime, duration);
   } catch (err) {
     console.error('[Main] Frame probe error:', err.message);
@@ -884,6 +1179,16 @@ ipcMain.handle('inspector-available', async () => inspector.isAvailable());
 ipcMain.handle('measure-loudness', async (event, filePath, options) => {
   console.log('[Main] IPC: measure-loudness', filePath, options);
   try {
+    // A DCP's sound is its own track file. Only a single-reel package can be
+    // measured this way — a programme figure for one reel of several would be
+    // a wrong number presented as the right one.
+    if (isDcpPath(filePath)) {
+      const comp = dcp.parseCpl(filePath);
+      if (comp.reels.length > 1) {
+        return { error: 'Loudness measurement is not available for multi-reel DCPs yet (' + comp.reels.length + ' reels).' };
+      }
+      filePath = dcpTrackFile(filePath, 'sound');
+    }
     const measurement = await loudness.measureLoudness(filePath, Object.assign({}, options, {
       onProgress: (pct) => {
         if (!event.sender.isDestroyed()) event.sender.send('loudness-progress', pct);
@@ -1023,7 +1328,7 @@ ipcMain.handle('start-stream', async (_event, filePath, seekTime = 0) => {
         streamProbeCache.mtimeMs === stat.mtimeMs && streamProbeCache.size === stat.size) {
       probe = streamProbeCache.probe;
     } else {
-      probe = await transcoder.probeFile(filePath);
+      probe = isDcpPath(filePath) ? await dcp.probe(filePath) : await transcoder.probeFile(filePath);
       if (probe.error) {
         return { error: probe.error };
       }
@@ -1034,6 +1339,23 @@ ipcMain.handle('start-stream', async (_event, filePath, seekTime = 0) => {
     if (!streamDecoder) {
       streamDecoder = new StreamDecoder();
     }
+
+    // DCP: how much of the JPEG 2000 to decode, and what to do when even
+    // that is not realtime on this machine.
+    const isDcp = dcp.isDcpProbe(probe);
+    streamDecoder.dcpLowres = isDcp ? dcpLowresFor(probe) : null;
+    streamDecoder.onTooSlow = !isDcp ? null : (m) => {
+      if (dcpResolution !== 'auto') return;           // the operator chose; leave it
+      if (m.lowres >= dcp.maxLowres(probe)) return;   // nothing lower worth showing
+      dcpAutoStep += 1;
+      console.log('[Main] DCP decode at ' + m.rate.toFixed(1) + ' fps is under ' + m.fps +
+                  ' — dropping to resolution level ' + dcpLowresFor(probe));
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('stream-restart', {
+          reason: 'Lowering DCP decode resolution to keep playback realtime…',
+        });
+      }
+    };
 
     // Wire up callbacks to send data to renderer
     streamDecoder.onData = (chunk) => {
@@ -1096,6 +1418,11 @@ ipcMain.handle('sdi-get-state', async () => ({
 ipcMain.handle('sdi-start', async (_event, opts) => {
   const device = sdiSelectedDevice();
   if (!device) return { error: 'No external video device is selected.' };
+  // The SDI decode reads one media file; a DCP is reels behind a playlist and
+  // that path has not been built or tested against a card.
+  if (isDcpPath(opts.source)) {
+    return { error: 'DCP playback is on the desktop only for now — it is not yet routed to external video output.' };
+  }
 
   // Ask the DEVICE which of its modes fits — never the static table, since the
   // card is the authority on what it can drive.
@@ -1525,6 +1852,15 @@ if (process.platform === 'win32') {
 }
 
 app.whenReady().then(() => {
+  // DCP state: the OV a version file was pointed at, this player's KDM
+  // certificate, and the KDMs loaded so far. The private key is kept under
+  // the OS keychain where there is one.
+  const keychain = (() => { try { return safeStorage.isEncryptionAvailable(); } catch (_) { return false; } })();
+  dcp.configure({
+    stateDir: app.getPath('userData'),
+    protect: keychain ? (text) => safeStorage.encryptString(text) : null,
+    unprotect: keychain ? (buf) => safeStorage.decryptString(buf) : null,
+  });
   loadLookState();   // before the menu is built, so its check marks are right
   createWindow();
   if (app.isPackaged) checkForUpdates(false);
@@ -1552,6 +1888,8 @@ app.on('will-quit', () => {
     streamDecoder = null;
   }
   transcoder.cleanupTempFiles();
+  // The concat scripts written for DCP reels.
+  dcp.cleanup();
 });
 
 // SDI: find devices once the app is up, and release the card when it quits —

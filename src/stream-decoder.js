@@ -19,6 +19,7 @@
 const { spawn } = require('child_process');
 const { FFMPEG } = require('./transcoder');
 const braw = require('./braw');
+const dcp = require('./dcp');
 
 class StreamDecoder {
   constructor() {
@@ -37,6 +38,19 @@ class StreamDecoder {
     this.onEnd = null;     // () => void
     this.onError = null;   // (string) => void
     this.onProgress = null; // (number) => void  — current time in seconds
+
+    // DCP only. JPEG 2000 resolution levels to skip (0 full, 1 half, …), set
+    // by the caller before start(); null leaves it to dcp.defaultLowres().
+    this.dcpLowres = null;
+    // ({ rate, fps, lowres }) => void — the decode is running slower than the
+    // picture plays, measured over its first seconds. The caller decides
+    // whether to restart at a lower resolution.
+    this.onTooSlow = null;
+    this.speedWatch = null;
+    // Stops the feed of decrypted sound for an encrypted DCP, while one runs.
+    this.dcpSoundStop = null;
+    // The running stream's input scripts, while they still hold content keys.
+    this.dcpSecrets = null;
   }
 
   /**
@@ -79,13 +93,34 @@ class StreamDecoder {
     this.active = true;
 
     const isBraw = !!probeInfo.isBraw;
+    const fps = probeInfo.fps || 0;
+
+    // A DCP is a composition, not a file: its reels come in as two concat
+    // inputs, picture then sound, already cut to the seek position.
+    let dcpPlan = null;
+    let dcpLowres = 0;
+    if (!isBraw && dcp.isDcpProbe(probeInfo)) {
+      dcpLowres = this.dcpLowres === null ? dcp.defaultLowres(probeInfo) : this.dcpLowres;
+      try {
+        dcpPlan = dcp.inputArgs(probeInfo.dcp, seekTime, dcpLowres);
+      } catch (err) {
+        console.error('[StreamDecoder] DCP input error:', err.message);
+        this.active = false;
+        if (this.onError) this.onError('Could not prepare the DCP: ' + err.message);
+        return;
+      }
+    }
+    this.speedWatch = dcpPlan ? { fps, lowres: dcpLowres, t0: 0, f0: 0, done: false } : null;
 
     // BRAW audio is not wired up yet. The helper has to finish writing the
     // clip's PCM to a file before FFmpeg can take it as a second input, and
     // that pre-pass has to complete before frame decoding starts — which
     // start() being synchronous does not allow. Video first; audio needs a
     // wider change than this path.
-    const hasAudio = isBraw ? false : !!(probeInfo.audioCodec);
+    const hasAudio = isBraw ? false : dcpPlan ? dcpPlan.hasSound : !!(probeInfo.audioCodec);
+    // Which ffmpeg input carries the audio: the file itself, or the DCP's
+    // sound reels.
+    const audioInput = dcpPlan ? 1 : 0;
     const duration = probeInfo.duration || 0;
 
     // Build ffmpeg arguments
@@ -103,6 +138,8 @@ class StreamDecoder {
         '-framerate', probeInfo.brawFrameRateRational || String(probeInfo.fps || 24),
         '-i', 'pipe:0'
       );
+    } else if (dcpPlan) {
+      args.push(...dcpPlan.args);
     } else {
       // Seek position (before input for fast seek)
       if (seekTime > 0) {
@@ -122,9 +159,19 @@ class StreamDecoder {
       '-pix_fmt', 'yuv420p',
       '-profile:v', 'high',
       '-level', '4.1',
-      // Ensure even dimensions
-      '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2'
+      // Ensure even dimensions. A DCP is X'Y'Z'; the scaler takes it to RGB
+      // and on to YUV, and saying which YUV (and tagging the stream to match)
+      // keeps Chromium from guessing a different matrix on the way back.
+      //
+      // For a DCP that conversion is the slowest stage of the whole pipeline,
+      // slower than the JPEG 2000 decode: on one thread it held a 2K picture
+      // to 16 fps where the decoder alone managed 27. Giving the scaler a few
+      // threads (more starves the decoder) measured 23 fps at full size and
+      // 61 instead of 44 at half, with byte-identical output.
+      '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2' +
+        (dcpPlan ? ':out_color_matrix=bt709:threads=' + (dcpLowres > 0 ? 2 : 4) : '')
     );
+    if (dcpPlan) args.push('-colorspace', 'bt709');
 
     // Audio encoding (if present)
     if (hasAudio) {
@@ -139,15 +186,17 @@ class StreamDecoder {
         // every other track would be inaudible and unmeterable. amerge
         // interleaves them into a single stream that preserves each track as
         // its own channel.
-        const inputs = Array.from({ length: audioStreams }, (_, i) => '[0:a:' + i + ']').join('');
+        const inputs = Array.from({ length: audioStreams }, (_, i) => '[' + audioInput + ':a:' + i + ']').join('');
         args.push(
           '-filter_complex', inputs + 'amerge=inputs=' + audioStreams + '[aout]',
           '-map', '0:v:0',
           '-map', '[aout]'
         );
       } else {
-        args.push('-map', '0:v:0', '-map', '0:a:0');
+        args.push('-map', '0:v:0', '-map', audioInput + ':a:0');
       }
+      // DCP: keep the 5.1 bed and leave HI/VI-N and the sync tracks behind.
+      if (dcpPlan && dcpPlan.soundFilter) args.push('-af', dcpPlan.soundFilter);
 
       args.push(
         '-c:a', 'aac',
@@ -176,9 +225,11 @@ class StreamDecoder {
     try {
       this.process = spawn(FFMPEG, args, {
         windowsHide: true,
-        stdio: [isBraw ? 'pipe' : 'ignore', 'pipe', 'pipe'],
+        // A fourth pipe carries an encrypted DCP's sound, decrypted here.
+        stdio: [isBraw ? 'pipe' : 'ignore', 'pipe', 'pipe'].concat(dcpPlan && dcpPlan.soundPump ? ['pipe'] : []),
       });
       this.flowPaused = false;   // fresh process starts flowing
+      if (dcpPlan && dcpPlan.soundPump) this.dcpSoundStop = dcpPlan.soundPump(this.process.stdio[3]);
     } catch (err) {
       console.error('[StreamDecoder] Spawn error:', err.message);
       this.active = false;
@@ -191,7 +242,11 @@ class StreamDecoder {
     }
 
     // Read fMP4 data from stdout
+    this.dcpSecrets = dcpPlan && dcpPlan.secretFiles.length ? dcpPlan : null;
     this.process.stdout.on('data', (chunk) => {
+      // Output means ffmpeg has read its inputs' scripts; an encrypted DCP's
+      // carry content keys, so they come off the disk now.
+      if (this.dcpSecrets) { dcp.forgetSecrets(this.dcpSecrets); this.dcpSecrets = null; }
       if (!this.active) return;
       if (this.onData) this.onData(chunk);
     });
@@ -200,6 +255,7 @@ class StreamDecoder {
     this.process.stderr.on('data', (d) => {
       if (!this.active) return;
       const text = d.toString();
+      this.watchSpeed(text);
       // Parse time= for progress
       const timeMatch = text.match(/time=(\d+):(\d+):(\d+)\.(\d+)/);
       if (timeMatch && this.onProgress) {
@@ -232,6 +288,39 @@ class StreamDecoder {
       this.process = null;
       if (this.onError) this.onError('ffmpeg error: ' + err.message);
     });
+  }
+
+  /**
+   * DCP only: is the decode keeping up with the picture?
+   *
+   * JPEG 2000 in software is the one format here that can be slower than
+   * realtime — measured on a 16-thread desktop, a 2K DCP decodes at about 16
+   * fps at full size and 46 at half. So the frame counter in ffmpeg's own
+   * progress line is timed over the first three seconds of steady output and,
+   * if the rate is under the picture's, onTooSlow fires — once per start.
+   *
+   * Backpressure makes the counter meaningless (a paused pipe is not a slow
+   * decoder), so the measurement is abandoned if it engages first. It cannot
+   * engage early in practice: it needs 30 s buffered ahead.
+   */
+  watchSpeed(text) {
+    const w = this.speedWatch;
+    if (!w || w.done) return;
+    if (this.flowPaused) { w.done = true; return; }
+    const all = text.match(/frame=\s*(\d+)/g);
+    if (!all) return;
+    const frames = parseInt(all[all.length - 1].replace(/\D+/g, ''), 10);
+    if (!(frames > 0)) return;
+    const now = Date.now();
+    if (!w.t0) { w.t0 = now; w.f0 = frames; return; }
+    const elapsed = (now - w.t0) / 1000;
+    if (elapsed < 3) return;
+    w.done = true;
+    const rate = (frames - w.f0) / elapsed;
+    console.log('[StreamDecoder] DCP decode rate: ' + rate.toFixed(1) + ' fps for a ' + w.fps + ' fps picture (lowres ' + w.lowres + ')');
+    if (w.fps > 0 && rate < w.fps * 1.05 && this.onTooSlow) {
+      this.onTooSlow({ rate, fps: w.fps, lowres: w.lowres });
+    }
   }
 
   /**
@@ -302,6 +391,12 @@ class StreamDecoder {
         this.preProcess.kill('SIGKILL');
       } catch (_) { /* ignore */ }
       this.preProcess = null;
+    }
+    // Stopped before any output: the scripts with content keys are still there.
+    if (this.dcpSecrets) { dcp.forgetSecrets(this.dcpSecrets); this.dcpSecrets = null; }
+    if (this.dcpSoundStop) {
+      try { this.dcpSoundStop(); } catch (_) { /* ignore */ }
+      this.dcpSoundStop = null;
     }
     if (this.process) {
       console.log('[StreamDecoder] Stopping process');
