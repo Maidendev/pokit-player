@@ -1,0 +1,61 @@
+/* Playlist panel: slides in from the left edge of the player. */
+#app { --playlist-width: min(330px, 46vw); }
+
+#playlist-panel {
+  position: absolute; left: 0; top: 38px; bottom: 84px; z-index: 41;
+  width: var(--playlist-width); background: var(--bg-panel); color: var(--text-primary);
+  border: 1px solid var(--border-color); border-left: none; font-size: 12px;
+  display: flex; flex-direction: column; user-select: none;
+  transform: translateX(-102%); visibility: hidden;
+  transition: transform var(--transition-normal), visibility 0s linear 250ms;
+}
+#app.playlist-open #playlist-panel { transform: none; visibility: visible; transition: transform var(--transition-normal); }
+#video-container { transition: left var(--transition-normal); }
+#app.playlist-open #video-container { left: var(--playlist-width); }
+body.presentation #playlist-panel { display: none; }
+body.presentation #app.playlist-open #video-container { left: 0; }
+
+#playlist-panel [hidden] { display: none !important; }
+#playlist-panel header { display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; border-bottom: 1px solid var(--border-color); }
+#playlist-panel header strong { color: #ffc12d; }
+#playlist-panel button, #playlist-panel select, #playlist-panel input[type=text] {
+  background: var(--bg-primary); color: inherit; border: 1px solid var(--border-color);
+  border-radius: var(--radius); padding: 5px 8px; font: inherit; min-width: 0;
+}
+#playlist-panel button { cursor: pointer; white-space: nowrap; }
+#playlist-panel button:hover:not(:disabled) { background: var(--button-hover); color: var(--button-hover-text); }
+#playlist-panel button:disabled { opacity: .45; cursor: default; }
+#playlist-panel input[type=checkbox] { accent-color: var(--accent); }
+#playlist-panel input[type=text] { user-select: text; }
+#playlist-panel :focus-visible { outline: 2px solid var(--accent-hover); outline-offset: 1px; }
+
+.pl-top { display: grid; gap: 8px; padding: 10px; border-bottom: 1px solid var(--border-color); }
+.pl-row { display: flex; gap: 6px; align-items: center; }
+.pl-row > select, .pl-row > input[type=text], .pl-row > .pl-grow { flex: 1; }
+button#pl-add { background: var(--accent); color: white; font-weight: 600; border-color: transparent; }
+
+#pl-list { flex: 1; overflow-y: auto; padding: 6px; }
+#pl-empty { padding: 18px 12px; color: var(--text-muted); line-height: 1.5; text-align: center; }
+.pl-item {
+  display: grid; grid-template-columns: 18px 84px 1fr 22px; gap: 8px; align-items: center;
+  padding: 5px; border-radius: var(--radius); border: 1px solid transparent; cursor: pointer;
+}
+.pl-item:hover { background: var(--bg-secondary); }
+.pl-item.playing { background: var(--accent-glow); border-color: var(--accent); }
+.pl-item.missing .pl-name { color: var(--danger); }
+.pl-item.drop-above { box-shadow: 0 -2px 0 var(--accent-hover); }
+.pl-item.drop-below { box-shadow: 0 2px 0 var(--accent-hover); }
+.pl-item.dragging { opacity: .4; }
+.pl-num { color: var(--text-muted); text-align: right; font-variant-numeric: tabular-nums; }
+.pl-thumb {
+  width: 84px; height: 48px; border-radius: 4px; background: #000 center / contain no-repeat;
+  border: 1px solid var(--border-color); display: grid; place-items: center; color: var(--text-muted); font-size: 10px;
+}
+.pl-text { min-width: 0; }
+.pl-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pl-meta { color: var(--text-muted); margin-top: 2px; font-variant-numeric: tabular-nums; }
+#playlist-panel button.pl-remove { padding: 0; width: 20px; height: 20px; border-color: transparent; background: none; color: var(--text-muted); }
+
+#playlist-panel footer { border-top: 1px solid var(--border-color); padding: 8px 10px; display: grid; gap: 6px; }
+#pl-status { margin: 0; color: var(--text-muted); min-height: 1.2em; }
+#pl-play { font-weight: 600; }

@@ -8,6 +8,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // DCP: a folder, or any file inside one → { cplPath, title } | null
   openDcpDialog: () => ipcRenderer.invoke('open-dcp-dialog'),
   resolveDcp: (inputPath) => ipcRenderer.invoke('dcp-resolve', inputPath),
+  // Playlists: named lists of media files, kept as files in a folder of their own
+  playlistList: () => ipcRenderer.invoke('playlist-list'),
+  playlistLoad: (file) => ipcRenderer.invoke('playlist-load', file),
+  playlistSave: (playlist) => ipcRenderer.invoke('playlist-save', playlist),
+  playlistDelete: (file) => ipcRenderer.invoke('playlist-delete', file),
+  playlistAddFiles: () => ipcRenderer.invoke('playlist-add-files'),
+  playlistAddFolder: () => ipcRenderer.invoke('playlist-add-folder'),
+  playlistItemInfo: (itemPath) => ipcRenderer.invoke('playlist-item-info', itemPath),
+  playlistOpenFolder: () => ipcRenderer.invoke('playlist-open-folder'),
+  onTogglePlaylist: (callback) => ipcRenderer.on('toggle-playlist', () => callback()),
   getFileStats: (filePath) => ipcRenderer.invoke('get-file-stats', filePath),
   toggleFullscreen: () => ipcRenderer.invoke('toggle-fullscreen'),
   isFullscreen: () => ipcRenderer.invoke('is-fullscreen'),

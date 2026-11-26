@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="editing.css">
   <link rel="stylesheet" href="notes.css">
+  <link rel="stylesheet" href="playlist.css">
 </head>
 <body>
   <div id="app">
@@ -318,7 +319,10 @@
           <button id="btn-add-marker" class="ctrl-btn" title="Add Marker (M)">
             <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 3h2v18H6V3zm2 1h11l-3 4.5 3 4.5H8V4z"/></svg>
           </button>
-          <button id="btn-picture-notes" class="ctrl-btn" title="Picture notes" aria-label="Picture notes" aria-controls="notes-panel" aria-expanded="false" disabled>
+          <button id="btn-playlist" class="ctrl-btn" title="Playlists (Ctrl/Cmd+Shift+P)" aria-label="Playlists" aria-controls="playlist-panel" aria-expanded="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 6h11M4 11h11M4 16h7"/><path d="M16 14.5v5l4.5-2.5z" fill="currentColor" stroke="none"/></svg>
+          </button>
+          <button id="btn-picture-notes"class="ctrl-btn" title="Picture notes" aria-label="Picture notes" aria-controls="notes-panel" aria-expanded="false" disabled>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 4H5a2 2 0 0 0-2 2v13h13a2 2 0 0 0 2-2v-6M10 14l1-4 8-8 3 3-8 8z"/></svg>
           </button>
         </div>
@@ -429,6 +433,22 @@
     </div>
 
     <!-- Markers Panel -->
+    <!-- Playlist panel: slides in from the left (src/playlist-ui.js) -->
+    <aside id="playlist-panel" aria-label="Playlists" aria-hidden="true">
+      <header><strong>Playlists</strong><button id="pl-close" aria-label="Close playlists">×</button></header>
+      <div class="pl-top">
+        <div class="pl-row"><select id="pl-select" aria-label="Playlist"></select><button id="pl-new">+ New</button></div>
+        <div class="pl-row"><input id="pl-name" type="text" maxlength="80" placeholder="Playlist name" aria-label="Playlist name"><button id="pl-delete">Delete</button></div>
+        <div class="pl-row"><button id="pl-add" class="pl-grow">+ Add files…</button><button id="pl-add-folder">+ Add DCP folder…</button></div>
+      </div>
+      <div id="pl-list"></div>
+      <footer>
+        <div class="pl-row"><button id="pl-prev" aria-label="Previous clip" title="Previous clip">|◀</button><button id="pl-play" class="pl-grow">▶ Play playlist</button><button id="pl-next" aria-label="Next clip" title="Next clip">▶|</button></div>
+        <div class="pl-row"><label><input id="pl-repeat" type="checkbox"> Repeat playlist</label><span id="pl-count" class="pl-grow" style="text-align:right"></span></div>
+        <div class="pl-row"><button id="pl-folder" class="pl-grow">Open playlists folder</button></div>
+        <p id="pl-status" role="status"></p>
+      </footer>
+    </aside>
     <aside id="notes-panel" hidden aria-label="Picture notes">
       <header><strong>Picture notes</strong><label><input id="notes-visible" type="checkbox" checked> Show notes</label><button id="notes-close" aria-label="Close picture notes">×</button></header>
       <div class="notes-body">
@@ -576,6 +596,7 @@
   <script src="lut.js"></script>
   <script src="masks.js"></script>
   <script src="notes.js"></script>
+  <script src="playlist-ui.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

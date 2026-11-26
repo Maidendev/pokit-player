@@ -1762,6 +1762,10 @@
       return;
     }
 
+    // A playlist carries straight on into its next clip. Loop Playback means
+    // "this clip again", so it wins.
+    if (!loopEnabled && playlist.handleEnded()) return;
+
     updatePlayButton();
     showControls();
   });
@@ -1843,6 +1847,9 @@
     e.preventDefault();
     dragCounter = 0;
     dragOverlay.classList.remove('visible');
+    // Dropped on the playlist panel: that is footage for the list (or a row
+    // being reordered), and the panel has already dealt with it.
+    if (e.target && e.target.closest && e.target.closest('#playlist-panel')) return;
 
     const files = e.dataTransfer.files;
     if (files.length > 0) {
@@ -2839,6 +2846,9 @@
     if (!currentInspection || !currentInspection.audio.length) {
       return Array.from({ length: count }, (_, i) => String(i + 1));
     }
+    // A DCP's sound track file names no layout; its first six channels are
+    // the 5.1 bed in this order by the standard.
+    if (currentProbeInfo && currentProbeInfo.isDcp && count === 6) return ['L', 'R', 'C', 'LFE', 'Ls', 'Rs'];
     const tracks = currentInspection.audio;
     if (tracks.length === 1) return tracks[0].speakerLabels.slice(0, count);
     if (tracks.length === 2 && tracks.every((t) => t.channels === 1)) return ['L', 'R'];
@@ -2879,12 +2889,25 @@
     if (currentInspection && !currentInspection.audio.length) {
       // Inspected and definitively has no audio — keep the HUD out of the way.
       meterHud.classList.add('hidden');
+      // But never leave the element's sound routed nowhere. Once the graph
+      // exists every file plays through it, and teardown unhooks it; if the
+      // inspection is wrong about there being no audio (it was, for a DCP),
+      // an unrouted source is never pulled and the picture freezes with it.
+      if (meterSourceNode && !channelStrips.length) {
+        try {
+          meterSourceNode.disconnect();
+          meterSourceNode.connect(audioCtx.destination);
+          if (audioCtx.state === 'suspended') audioCtx.resume();
+        } catch (_) { /* ignore */ }
+      }
       return;
     }
 
     // Count every track, not just the first: the decoder now merges discrete
     // mono tracks into one stream, so all of them are audible and meterable.
-    const count = Math.max(1, Math.min(totalFileChannels() || 2, 8));
+    // A DCP plays as its 5.1 bed whatever the sound track file carries.
+    const isDcp = !!(currentProbeInfo && currentProbeInfo.isDcp);
+    const count = Math.max(1, Math.min(totalFileChannels() || 2, isDcp ? 6 : 8));
     if (channelStrips.length && count === meterChannelCount) return;  // already built
 
     if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
@@ -3322,6 +3345,7 @@
 
   function onMediaChanged(filePath) {
     pictureNotes.load(filePath);
+    playlist.mediaChanged();
     inPoint = null;
     outPoint = null;
     playingSelection = false;
@@ -4633,6 +4657,13 @@
   // ─── Initial State ────────────────────────────────────
   updateVolumeIcon();
   updatePlayButton();
+  const playlist = window.createPlaylist({
+    video,
+    openFile,
+    // Same state togglePlay() leaves behind, so J/K/L carry on from 1x.
+    play: () => { shuttleDirection = 1; shuttleSpeed = 1; video.playbackRate = 1; video.play().catch(() => {}); },
+  });
+  window.electronAPI.onTogglePlaylist(() => playlist.toggle());
   const pictureNotes = window.createPictureNotes({ video, fps: () => frameRate, tc: tcOf, seek: seekTo, duration: () => currentProbeInfo?.duration || video.duration });
   console.log('[Renderer] MaidenPlayer v1.5.1 initialized');
 

@@ -66,6 +66,17 @@ Deep inspection via ffprobe, in a summary view with an expandable **Advanced** s
   bundled; see [native/braw-decode](native/braw-decode/README.md). Video only
   for now — `.braw` audio is not wired up yet.
 
+#### Playlists (`⌘⇧P` / `Ctrl+Shift+P`)
+- A panel slides in from the left: make a playlist, name it, and add footage
+  from disk (Add files…, Add DCP folder…, or drop files on the panel).
+- Each entry shows a thumbnail, its name and running time. Drag to reorder,
+  click to play from that clip; the player then runs clip to clip in the same
+  window. Repeat playlist starts over at the end. A missing file is marked and
+  stepped over. Loop Playback still means "this clip again".
+- Playlists are small `.maidenplaylist` files in `Documents/MaidenPlayer
+  Playlists` (Open playlists folder). They point at the media where it is;
+  nothing is copied.
+
 #### External Video Output (Blackmagic SDI)
 - **Playback ▸ External Video Output** lists every connected DeckLink or
   UltraStudio and routes playback out of it over SDI — the equivalent of RV's

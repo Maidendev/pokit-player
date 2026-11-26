@@ -21,6 +21,7 @@ const { StreamDecoder } = require('./stream-decoder');
 const braw = require('./braw');
 const sdi = require('./sdi');
 const dcp = require('./dcp');
+const playlists = require('./playlists');
 const editor = require('./editor');
 const { autoUpdater } = require('electron-updater');
 
@@ -587,6 +588,12 @@ function buildMenu() {
           click: () => exportCertificateDialog(),
         },
         { type: 'separator' },
+        {
+          label: 'Playlists…',
+          accelerator: 'CmdOrCtrl+Shift+P',
+          click: () => { if (mainWindow) mainWindow.webContents.send('toggle-playlist'); },
+        },
+        { type: 'separator' },
         // ── QuickTime 7 Pro-style utilities. Everything here saves a NEW file
         //    through src/editor.js; the source is never modified.
         {
@@ -1038,6 +1045,54 @@ ipcMain.handle('open-image-sequence-dialog', async () => {
   await openImageSequenceDialog();
 });
 
+// ─── Playlists ───────────────────────────────────────────────────────────────
+// Named lists of media files (src/playlists.js), one small file each in
+// Documents/MaidenPlayer Playlists, built and played from the panel that
+// slides in from the left.
+// MAIDENPLAYER_PLAYLIST_DIR points it somewhere else, for testing.
+const playlistDir = () => process.env.MAIDENPLAYER_PLAYLIST_DIR || path.join(app.getPath('documents'), 'MaidenPlayer Playlists');
+const guarded = (fn) => async (_event, arg) => {
+  try { return await fn(arg); } catch (err) { console.error('[Main] Playlist:', err.message); return { error: err.message }; }
+};
+ipcMain.handle('playlist-list', async () => { try { return playlists.list(); } catch (err) { console.error('[Main] Playlist list:', err.message); return []; } });
+ipcMain.handle('playlist-load', guarded((file) => playlists.load(file)));
+ipcMain.handle('playlist-save', guarded((playlist) => playlists.save(playlist || {})));
+ipcMain.handle('playlist-delete', guarded((file) => playlists.remove(file)));
+ipcMain.handle('playlist-item-info', guarded((itemPath) => playlists.itemInfo(itemPath)));
+ipcMain.handle('playlist-open-folder', async () => {
+  const dir = playlistDir();
+  try { fs.mkdirSync(dir, { recursive: true }); } catch (_) { /* openPath reports it */ }
+  return shell.openPath(dir);
+});
+ipcMain.handle('playlist-add-files', async () => {
+  if (!mainWindow) return [];
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Add to Playlist',
+    properties: ['openFile', 'multiSelections'],
+    filters: [
+      { name: 'Media Files', extensions: [...VIDEO_EXTENSIONS, ...AUDIO_EXTENSIONS].map((e) => e.replace(/^\./, '')) },
+      { name: 'All Files', extensions: ['*'] },
+    ],
+  });
+  return result.canceled ? [] : result.filePaths;
+});
+ipcMain.handle('playlist-add-folder', async () => {
+  if (!mainWindow) return [];
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Add a DCP to the Playlist (select the DCP folder)',
+    properties: ['openDirectory'],
+  });
+  if (result.canceled || !result.filePaths.length) return [];
+  if (!dcp.resolve(result.filePaths[0])) {
+    await dialog.showMessageBox(mainWindow, {
+      type: 'warning', title: 'Add to Playlist', message: 'That folder is not a DCP',
+      detail: 'Use Add files… for ordinary media. A DCP folder holds an ASSETMAP, a CPL and MXF track files.\n\n' + result.filePaths[0],
+    });
+    return [];
+  }
+  return result.filePaths;
+});
+
 ipcMain.handle('open-dcp-dialog', async () => {
   await openDcpDialog();
 });
@@ -1149,9 +1204,17 @@ ipcMain.handle('inspect-file', async (_event, filePath) => {
     if (braw.isBrawFile(filePath)) {
       return await braw.inspect(filePath);
     }
-    // A DCP: inspect the first reel's picture track file.
+    // A DCP: inspect the first reel's picture track file, and report the
+    // sound track file's audio with it. The picture file alone says "no
+    // audio", and the player believed it: no meters, and — once another file
+    // had set the audio graph up — sound routed nowhere, which froze playback.
     if (isDcpPath(filePath)) {
-      return await inspector.inspectFile(dcpTrackFile(filePath, 'picture'));
+      const inspection = await inspector.inspectFile(dcpTrackFile(filePath, 'picture'));
+      try {
+        const sound = await inspector.inspectFile(dcpTrackFile(filePath, 'sound'));
+        inspection.audio = sound.audio || [];
+      } catch (_) { /* no sound reel: the picture's answer stands */ }
+      return inspection;
     }
 
     return await inspector.inspectFile(filePath);
@@ -1860,6 +1923,13 @@ app.whenReady().then(() => {
     stateDir: app.getPath('userData'),
     protect: keychain ? (text) => safeStorage.encryptString(text) : null,
     unprotect: keychain ? (buf) => safeStorage.decryptString(buf) : null,
+  });
+  playlists.configure({
+    dir: playlistDir(),
+    thumbDir: path.join(app.getPath('userData'), 'playlist-thumbs'),
+    ffmpeg: transcoder.FFMPEG,
+    probeFile: transcoder.probeFile,
+    dcp,
   });
   loadLookState();   // before the menu is built, so its check marks are right
   createWindow();
